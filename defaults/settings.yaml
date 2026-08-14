@@ -1,0 +1,19 @@
+# dsh 默认配置模板
+# entrypoint 首启复制到数据卷，之后由用户持久化维护
+#
+# dsh default configuration template
+# Copied by entrypoint to the data volume on first run; maintained by the user afterwards
+#
+# 说明：
+# - deepseek-official provider 无需显式配置：默认 apiKeyEnv=DEEPSEEK_API_KEY
+#   （.env 注入）、默认 baseURL=https://api.deepseek.com
+# - 仅设置默认模型；更多模型/自定义 provider 请在数据卷 settings.yaml 追加
+#
+# Notes:
+# - The deepseek-official provider needs no explicit config: default apiKeyEnv=DEEPSEEK_API_KEY
+#   (injected via .env), default baseURL=https://api.deepseek.com
+# - Only the default model is set; add more models/custom providers to the data-volume settings.yaml
+agent-default-model:
+  provider: deepseek-official
+  model: deepseek-v4-pro
+  reasoningEffort: high

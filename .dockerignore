@@ -1,0 +1,10 @@
+# 构建上下文精简（Dockerfile 仅 COPY 所需文件）
+# Trim the build context (Dockerfile only COPYs the files it needs)
+.git
+.gitignore
+.env
+data
+DESIGN.md
+README.md
+LICENSE
+.github

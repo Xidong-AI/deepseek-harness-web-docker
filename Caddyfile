@@ -1,0 +1,33 @@
+# 反向代理配置
+#
+# Reverse proxy configuration
+#
+# DSH 反向代理：basic auth + 转发到容器内 dsh 127.0.0.1:3080
+#
+# DSH reverse proxy: basic auth + forwarding to the in-container dsh at 127.0.0.1:3080
+#
+# 注意：
+# - 容器内必须监听 0.0.0.0（Docker 端口映射 DNAT 到容器 eth0，bind loopback 会拒接映射流量）
+# - DSH 特权 API（settings.*/credentials.*）只接受 loopback 来源（防 DNS rebinding），
+#   必须把 Host/Origin 改写为 127.0.0.1:3080 使 dsh 视为本机来源；
+#   Origin 必须与改写后 Host 同源，否则 fence 的 Origin 检查仍 403
+# - bcrypt 哈希含 $ 字符，必须经环境变量注入（{$DSH_AUTH_HASH}），不能直写本文件
+# - http:// 前缀显式声明纯 HTTP 站点，禁用 auto-HTTPS/本地 CA
+#
+# Notes:
+# - Must listen on 0.0.0.0 inside the container (Docker port mapping DNATs to container eth0; binding loopback rejects mapped traffic)
+# - DSH privileged APIs (settings.*/credentials.*) accept only loopback origins (anti-DNS-rebinding),
+#   Host/Origin must be rewritten to 127.0.0.1:3080 so dsh treats it as a local origin;
+#   Origin must match the rewritten Host, otherwise the fence's Origin check still returns 403
+# - bcrypt hashes contain $, so they must be injected via environment variable ({$DSH_AUTH_HASH}), never written inline
+# - The http:// prefix explicitly declares a plain-HTTP site, disabling auto-HTTPS/local CA
+http://:3081 {
+	basic_auth {
+		{$DSH_AUTH_USER} {$DSH_AUTH_HASH}
+	}
+
+	reverse_proxy 127.0.0.1:3080 {
+		header_up Host 127.0.0.1:3080
+		header_up Origin http://127.0.0.1:3080
+	}
+}

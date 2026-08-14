@@ -1,0 +1,7 @@
+# 敏感文件与本地数据 | Sensitive files and local data
+.env
+data/
+
+# 本地构建工具目录（沙箱/测试用）
+# Local build tool directory (for sandbox/testing)
+.docker-local/

@@ -1,0 +1,25 @@
+# 编排配置
+# DeepSeek Harness Web Docker
+# 用法：cp .env.example .env（编辑 DSH_AUTH_USER/PASSWORD、DEEPSEEK_API_KEY）→ docker compose up -d --build
+# 配置、项目/会话数据与 agent 自装工具（x-cmd）持久化于 ./data（bind mount → /home/node 整个 HOME）
+#
+# Orchestration configuration
+# DeepSeek Harness Web Docker
+# Usage: cp .env.example .env (edit DSH_AUTH_USER/PASSWORD, DEEPSEEK_API_KEY) → docker compose up -d --build
+# Config, project/session data and agent-installed tools (x-cmd) persist in ./data (bind mount → the entire /home/node HOME)
+services:
+  dsh-web:
+    image: ghcr.io/xidong-ai/deepseek-harness-web-docker:latest
+    build:
+      context: .
+      args:
+        DSH_VERSION: ${DSH_VERSION:-0.1.0-rc.6}
+    container_name: dsh-web
+    restart: unless-stopped
+    ports:
+      - "${DSH_WEB_PORT:-3080}:3081"
+    volumes:
+      - ./data:/home/node
+    env_file: .env
+    environment:
+      - HOME=/home/node

@@ -1,0 +1,117 @@
+# 定时检查 dsh 上游版本：有新版本 → 提升版本号 → 构建冒烟测试 → 通过则推送 master，失败则创建 Issue
+# 推送 master 会触发 docker-build.yml 自动构建 GHCR 镜像，形成「升级 → 发布」闭环
+#
+# Scheduled dsh upstream check: bump version on update → build & smoke test → push master on success, open an Issue on failure
+# Pushing to master triggers docker-build.yml, which builds GHCR images — an "upgrade → release" loop
+name: check-dsh-upstream
+
+on:
+  schedule:
+    # 每日 UTC 03:00（北京时间 11:00）
+    #
+    # Daily 03:00 UTC (11:00 Beijing time)
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-dsh-upstream
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      current: ${{ steps.check.outputs.current }}
+      latest: ${{ steps.check.outputs.latest }}
+      should_upgrade: ${{ steps.check.outputs.should_upgrade }}
+      blocked: ${{ steps.gate.outputs.blocked }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 查询上游版本并比较
+        id: check
+        run: |
+          scripts/check-upstream.sh | tee -a "$GITHUB_OUTPUT"
+
+      # 门闩：同版本已有未关闭的失败 Issue 时跳过自动升级（npm 包版本不可变，重试必失败）
+      # 仅定时触发生效；手动触发（workflow_dispatch）绕过，用于人工重试环境性失败
+      #
+      # Gate: skip auto-upgrade when an open failure Issue exists for this version (npm versions are immutable, retry is doomed)
+      # Only applies to schedule runs; manual dispatch bypasses it for human-driven retries
+      - name: 门闩检查：同版本失败 Issue
+        id: gate
+        if: steps.check.outputs.should_upgrade == 'true' && github.event_name == 'schedule'
+        run: |
+          BLOCKED="$(scripts/check-issue-gate.sh "$LATEST")"
+          echo "blocked=$BLOCKED" >> "$GITHUB_OUTPUT"
+          if [ "$BLOCKED" = "1" ]; then
+            echo "存在 $LATEST 的未关闭失败 Issue，跳过本次自动升级（可手动触发强制重试）"
+          fi
+        env:
+          LATEST: ${{ steps.check.outputs.latest }}
+
+      - name: 打印检查结果
+        run: |
+          echo "当前版本 (current): ${{ steps.check.outputs.current }}"
+          echo "上游最新 (latest):  ${{ steps.check.outputs.latest }}"
+          echo "需要升级 (upgrade): ${{ steps.check.outputs.should_upgrade }}"
+          echo "被门闩拦截 (blocked): ${{ steps.gate.outputs.blocked }}"
+
+  upgrade:
+    needs: check
+    if: needs.check.outputs.should_upgrade == 'true' && needs.check.outputs.blocked != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 提升版本号（Dockerfile / compose / README 双语）
+        run: |
+          scripts/upgrade-dsh.sh "$LATEST"
+        env:
+          LATEST: ${{ needs.check.outputs.latest }}
+
+      - name: 构建镜像并冒烟测试
+        id: smoke
+        run: |
+          scripts/smoke-test.sh "$LATEST"
+        env:
+          LATEST: ${{ needs.check.outputs.latest }}
+
+      - name: 推送升级至 master
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Dockerfile docker-compose.yml README.md README.zh.md
+          git commit -m "【维护，构建】升级 dsh 版本至 $LATEST"
+          git push origin master
+        env:
+          LATEST: ${{ needs.check.outputs.latest }}
+
+      # 升级已成功：旧版本的失败 Issue 均已过时，关闭以免陈旧累积
+      # continue-on-error：清理失败不影响升级结果（不触发下方 failure() 步骤）
+      #
+      # The upgrade succeeded: failure Issues for older versions are stale; close them to avoid accumulation
+      # continue-on-error: cleanup failure must not fail the upgrade (must not trigger the failure() step below)
+      - name: 关闭过时的失败 Issue
+        continue-on-error: true
+        run: |
+          scripts/close-stale-issues.sh
+        env:
+          LATEST: ${{ needs.check.outputs.latest }}
+
+      - name: 失败时创建 Issue（同版本去重）
+        if: failure()
+        run: |
+          scripts/open-issue.sh "$LATEST" "$CURRENT"
+        env:
+          LATEST: ${{ needs.check.outputs.latest }}
+          CURRENT: ${{ needs.check.outputs.current }}
