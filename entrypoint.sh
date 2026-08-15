@@ -78,7 +78,14 @@ if [ -n "${DSH_TRUSTED_HOSTS:-}" ]; then
       echo "    trustedHosts:"
       # shellcheck disable=SC2086 # 有意按空白分词（逗号分隔列表）
       for host in ${DSH_TRUSTED_HOSTS//,/ }; do
-        echo "      - $host"
+        # 仅接受 域名/IP[:端口] 形态（字母数字 . : -），拒绝其余字符以免破坏 YAML
+        #
+        # Accept only host[:port] shapes (alphanumerics . : -); reject anything else so the YAML stays valid
+        if [[ "$host" =~ ^[A-Za-z0-9.:-]+$ ]]; then
+          echo "      - $host"
+        else
+          log "警告：跳过非法的 trustedHost 条目 [$host]（仅允许字母数字 . : -）"
+        fi
       done
     } > "$PATCH"
     log "已注入 trustedHosts: $DSH_TRUSTED_HOSTS"
