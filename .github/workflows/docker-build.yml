@@ -13,7 +13,30 @@ env:
   IMAGE: ghcr.io/xidong-ai/deepseek-harness-web-docker
 
 jobs:
+  # 推送前冒烟：构建镜像并跑端到端检查（basic auth / 特权 API fence / 双进程 / trustedHosts 注入），失败则不推送
+  # 手动 push 的代码不再未经验证直接发布
+  #
+  # Pre-push smoke test: build the image and run end-to-end checks (basic auth / privileged-API fence /
+  # both processes / trustedHosts injection); a failure blocks the push, so manually pushed code
+  # is no longer published unverified
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 提取 DSH_VERSION
+        id: version
+        run: |
+          echo "version=$(grep -E '^ARG DSH_VERSION=' Dockerfile | head -n1 | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: 构建并冒烟测试
+        run: |
+          scripts/smoke-test.sh "${{ steps.version.outputs.version }}"
+
   build:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: read
