@@ -41,10 +41,15 @@ PORT="$(docker port "$CID" 3081 | head -n1 | sed 's/.*://')"
 echo "    容器 $CID 已启动，映射端口 $PORT"
 
 echo "==> 等待服务就绪（最多 120s）"
+# 仅 200 视为就绪：502（Caddy 已起但 dsh 未就绪）与 000（未监听）都继续等；
+# 401 是 Caddy basic auth 层拒绝、不经过反代，也不能代表 dsh 就绪
+#
+# Only 200 means ready: 502 (Caddy up but dsh not yet) and 000 (not listening) keep waiting;
+# 401 is rejected at the Caddy basic-auth layer without touching the proxy, so it proves nothing
 READY=0
 for _ in $(seq 1 60); do
-  CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/" || true)"
-  if [ "$CODE" != "000" ]; then READY=1; break; fi
+  CODE="$(curl -s -u admin:smoketest -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/" || true)"
+  if [ "$CODE" = "200" ]; then READY=1; break; fi
   sleep 2
 done
 if [ "$READY" != 1 ]; then
