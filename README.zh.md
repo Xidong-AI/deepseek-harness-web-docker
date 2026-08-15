@@ -7,7 +7,7 @@
 ## 特性
 
 - 单容器自包含：dsh（仅容器内 loopback）+ Caddy 基础用户名密码认证（basic auth）
-- 配置与项目/会话数据持久化：bind mount `./data` → `/home/node/.dsh`（settings.yaml、API Key、profiles、sessions、storages）
+- 配置与项目/会话数据持久化：bind mount `./data` → `/home/node`（整个 HOME：settings.yaml、API Key、profiles、sessions、storages，及 agent 自装工具 `~/.x-cmd.root`）
 - 非 root 运行（uid 1000），dsh 不直接对外暴露
 - 镜像版本可 pin：构建参数 `DSH_VERSION`
 - CI 自动构建并推送 `ghcr.io/xidong-ai/deepseek-harness-web-docker`（latest + 日期时间 - 哈希 tag）

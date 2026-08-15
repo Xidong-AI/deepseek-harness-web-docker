@@ -7,7 +7,7 @@ Containerized deployment of the [DeepSeek Harness](https://github.com/deepseek-a
 ## Features
 
 - Self-contained single container: dsh (loopback only, inside the container) + Caddy username/password Basic Auth
-- Configuration and project/session data persisted: bind mount `./data` → `/home/node/.dsh` (settings.yaml, API Key, profiles, sessions, storages)
+- Configuration and project/session data persisted: bind mount `./data` → `/home/node` (the whole HOME: settings.yaml, API Key, profiles, sessions, storages, plus agent-installed tools under `~/.x-cmd.root`)
 - Runs as non-root (uid 1000); dsh is not exposed directly
 - Pinnable image version: build argument `DSH_VERSION`
 - CI automatically builds and pushes `ghcr.io/xidong-ai/deepseek-harness-web-docker` (latest + date-time-hash tags)
