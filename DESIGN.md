@@ -220,4 +220,5 @@ docker compose up -d --build  # 或 docker compose up -d（用 GHCR 镜像时）
 | 冒烟测试范围 | 仅 basic auth 401/200 + 双进程 RUNNING | 新增特权 API fence 断言（伪造 Host 直连容器内 dsh 的 `POST /api` 应 403；经 Caddy 伪造 Host/Origin 应被改写为 loopback、返回 400/404 而非 403）+ trustedHosts 注入断言；进程检查改为轮询等待（dsh 首启初始化慢于 Caddy） | 安全关键路径需回归：实测 dsh 特权 RPC 端点为 `POST /api`（GET 404，坏 payload 400/404），fence 即 DESIGN §2.1 所述 loopback 来源检查 |
 | chown 属主修正 | 每次启动无条件 `chown -R node:node /home/node` | 仅当根目录属主非 1000:1000 时全量修正，否则跳过 | 数据卷含 x-cmd 工具（数万文件），全量递归拖慢每次重启 |
 | trustedHosts 注入条件 | 仅当 `cordis.patch.yml` 不存在时注入 | 不存在**或为空模板**（顶层数组 `[]`，即 dsh 首启生成）时注入；已有内容/不可解析时跳过并提示 | dsh 首启自动生成空模板 patch（initProfile 对已存在文件不覆盖），用户首启未设变量、后设变量重启需能自动注入；已维护的 patch 绝不覆盖 |
+| 镜像构建（单阶段） | 单阶段 npm install，build-essential 安装于独立 RUN、purge 在后续层 | 多阶段构建：builder 阶段（build-essential+python3）编译 native 依赖（node-pty/sharp），运行镜像仅 COPY node_modules 与 dsh 入口；bin 用 `RUN ln -s` 重建（docker COPY 单文件会解引用 symlink，导致 ESM 从 /usr/local/bin/dsh 解析依赖失败）；COREPACK_HOME 移至 /usr/local/share/corepack 避免 root 缓存 | 镜像 1.6GB → 1.19GB（省 build-essential 层残留 ~250MB + /root/.cache 88MB）；node-pty/sharp 动态依赖（libstdc++/libgcc_s/glibc）由 node:22-slim 自带，运行阶段无需工具链 |
 

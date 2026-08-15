@@ -10,6 +10,12 @@
 # 构建：docker build --build-arg DSH_VERSION=0.1.0-rc.6 -t dsh-web:latest .
 #
 # Build: docker build --build-arg DSH_VERSION=0.1.0-rc.6 -t dsh-web:latest .
+#
+# 多阶段：builder 阶段含编译工具链（node-pty/sharp 等 native 依赖），
+# 运行镜像只 COPY 编译产物，不含 gcc/make/python-dev 痕迹
+#
+# Multi-stage: the builder stage holds the toolchain for native deps (node-pty/sharp);
+# the runtime image only copies compiled artifacts, with no gcc/make/python-dev remnants
 
 ARG DSH_VERSION=0.1.0-rc.6
 
@@ -20,9 +26,29 @@ ARG DSH_VERSION=0.1.0-rc.6
 # Static binary, platform-independent
 FROM caddy:2-alpine AS caddy
 
-FROM node:22-slim
+# ---- builder 阶段：编译 dsh（node-pty / sharp 等 native 依赖）----
+#
+# ---- builder stage: compile dsh (native deps such as node-pty / sharp) ----
+FROM node:22-slim AS builder
 
 ARG DSH_VERSION
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# build-essential + python3 仅用于 npm 编译，本阶段镜像不产出到运行镜像
+#
+# build-essential + python3 are only for npm compilation; this stage's image never reaches the runtime
+# hadolint ignore=DL3008
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential python3 \
+ && npm install -g @deepseek-ai/dsh@${DSH_VERSION} \
+ && npm cache clean --force \
+ && rm -rf /var/lib/apt/lists/* /root/.npm /root/.cache
+
+# ---- 运行阶段 ----
+#
+# ---- runtime stage ----
+FROM node:22-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -33,11 +59,23 @@ ENV DEBIAN_FRONTEND=noninteractive
 # From the official image, runs directly on glibc Debian
 COPY --from=caddy /usr/bin/caddy /usr/bin/caddy
 
+# dsh 编译产物：node_modules（含 node-pty/sharp native 二进制）与 dsh 入口
+# 动态依赖 libstdc++/libgcc_s/glibc 由 node:22-slim 自带，运行无需编译工具链
+# bin 用 RUN ln -s 重建：COPY 单文件会解引用 symlink，导致 ESM 从 /usr/local/bin/dsh
+# 解析依赖失败（node_modules 不可达）
+#
+# dsh compiled artifacts: node_modules (with node-pty/sharp native binaries) and the dsh entry
+# Dynamic deps (libstdc++/libgcc_s/glibc) ship with node:22-slim; no toolchain is needed at runtime
+# The bin is rebuilt with RUN ln -s: COPY of a single file dereferences the symlink, breaking
+# ESM resolution from /usr/local/bin/dsh (node_modules unreachable)
+COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/@deepseek-ai/dsh/lib/bin.js /usr/local/bin/dsh
+
 # 运行依赖与 agent 工具集
-# 全部可在白名单 bash 环境直接调用
+# 全部可在白名单 bash 环境直接调用；无 build-essential（编译只在 builder 阶段）
 #
 # Runtime Dependencies and Agent Toolset
-# All directly callable in the whitelisted bash environment
+# All directly callable in the whitelisted bash environment; no build-essential (compilation stays in the builder stage)
 #
 # - supervisor（PID 1 进程管理，Python 包，python3 保留）
 # - git/openssh-client：git 工作流（GIT_PAGER=cat 表明 dsh 预期 git 存在）
@@ -45,43 +83,26 @@ COPY --from=caddy /usr/bin/caddy /usr/bin/caddy
 # - procps(ps/kill/pgrep)：进程排查；ripgrep：代码搜索；rsync：同步
 # - yq：YAML 处理；file：类型识别；dnsutils(dig)：DNS 排查；sqlite3：数据
 # - python3-pip：python 包管理（pip install --user）；vim-tiny：vi 编辑器兜底
-# - build-essential/python3：npm 编译 native 依赖（node-pty 等），装完即清理
-#
-# - supervisor (PID 1 process management, Python package, python3 kept)
-# - git/openssh-client: git workflows (GIT_PAGER=cat shows dsh expects git)
-# - curl/wget: downloads; jq: JSON; unzip/zip: archive; tar (coreutils)
-# - procps (ps/kill/pgrep): process inspection; ripgrep: code search; rsync: sync
-# - yq: YAML; file: type detection; dnsutils (dig): DNS; sqlite3: data
-# - python3-pip: Python packages (pip install --user); vim-tiny: fallback vi editor
-# - build-essential/python3: compile native npm deps (node-pty etc.), purged after install
 #
 # 有意不 pin apt 版本：依赖 Debian 源自动更新；npm 版本已由 ARG DSH_VERSION pin
 #
 # Apt versions are deliberately unpinned: Debian sources auto-update; npm is pinned by ARG DSH_VERSION
 # hadolint ignore=DL3008
 RUN apt-get update \
- && apt-get install -y --no-install-recommends supervisor ca-certificates git openssh-client curl wget jq unzip zip procps ripgrep rsync yq file dnsutils sqlite3 python3-pip vim-tiny build-essential python3 \
+ && apt-get install -y --no-install-recommends supervisor ca-certificates git openssh-client curl wget jq unzip zip procps ripgrep rsync yq file dnsutils sqlite3 python3-pip vim-tiny python3 \
  && rm -rf /var/lib/apt/lists/*
 
 # pnpm
 # dsh plugin 命令在 profile 目录内转发给 pnpm（corepack 官方方式，pin 大版本）
+# COREPACK_HOME 指向系统目录：缓存不落在 /root，运行阶段可读且镜像不留 root 缓存
 #
 # pnpm
 # dsh plugin commands forward to pnpm inside the profile dir (official corepack way, major version pinned)
+# COREPACK_HOME points to a system dir so the cache never lands in /root (readable at runtime, no root cache in the image)
+ENV COREPACK_HOME=/usr/local/share/corepack
 RUN corepack enable \
- && corepack prepare pnpm@10 --activate
-
-# dsh 全局安装
-# 版本由 DSH_VERSION 构建参数固定
-# simp: 不硬编码 npm 镜像，用户可在构建时经 npm_config_registry 指定
-#
-# Global dsh Install
-# Version pinned by the DSH_VERSION build argument
-# simp: no hardcoded npm mirror; users can set npm_config_registry at build time
-RUN npm install -g @deepseek-ai/dsh@${DSH_VERSION} \
- && npm cache clean --force \
- && apt-get purge -y --auto-remove build-essential \
- && rm -rf /var/lib/apt/lists/* /root/.npm
+ && corepack prepare pnpm@10 --activate \
+ && rm -rf /root/.cache
 
 # 运行用户与数据目录
 # 非 root 运行用户：复用官方镜像自带的 node 用户（uid 1000，home /home/node）
