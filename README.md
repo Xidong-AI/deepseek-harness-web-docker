@@ -9,6 +9,7 @@ Containerized deployment of the [DeepSeek Harness](https://github.com/deepseek-a
 - Self-contained single container: dsh (loopback only, inside the container) + Caddy username/password Basic Auth
 - Configuration and project/session data persisted: bind mount `./data` → `/home/node` (the whole HOME: settings.yaml, API Key, profiles, sessions, storages, plus agent-installed tools under `~/.x-cmd.root`)
 - Runs as non-root (uid 1000); dsh is not exposed directly
+- Built-in health check: `docker compose ps` shows the real service health (`starting`/`healthy`/`unhealthy`), probing dsh through basic auth with credentials
 - Pinnable image version: build argument `DSH_VERSION`
 - CI automatically builds and pushes `ghcr.io/xidong-ai/deepseek-harness-web-docker` (latest + date-time-hash tags)
 - A scheduled CI job checks the dsh upstream daily: on a new version it bumps `DSH_VERSION`, builds and smoke-tests the image, pushes to master on success, or opens an Issue on failure (a failed version is not retried automatically while its Issue is open; manual dispatch bypasses the gate)

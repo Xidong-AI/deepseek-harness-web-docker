@@ -23,3 +23,18 @@ services:
     env_file: .env
     environment:
       - HOME=/home/node
+    # 健康检查：带凭据穿透 basic auth 请求 Caddy 反代，仅 200（dsh 真实响应）算健康；
+    # 401 是 Caddy 层拒绝、502 是 dsh 未就绪，均不算健康。
+    # $$ 转义为字面 $，运行时在容器内展开为 env_file 注入的凭据。
+    # start_period 覆盖 dsh 首启初始化（bundles 安装可能 1-2 分钟）。
+    #
+    # Health check: request through Caddy with credentials; only 200 (dsh actually responding)
+    # counts as healthy — 401 is rejected at the Caddy layer and 502 means dsh is not up yet.
+    # $$ escapes to a literal $, expanded at runtime to the credentials injected via env_file.
+    # start_period covers dsh's first-run init (bundle installation may take 1-2 minutes).
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -u \"$${DSH_AUTH_USER}:$${DSH_AUTH_PASSWORD}\" http://127.0.0.1:3081/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
