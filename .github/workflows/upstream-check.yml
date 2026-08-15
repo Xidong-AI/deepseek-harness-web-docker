@@ -49,10 +49,17 @@ jobs:
         if: steps.check.outputs.should_upgrade == 'true' && github.event_name == 'schedule'
         run: |
           BLOCKED="$(scripts/check-issue-gate.sh "$LATEST")"
-          echo "blocked=$BLOCKED" >> "$GITHUB_OUTPUT"
           if [ "$BLOCKED" = "1" ]; then
+            BOOL=true
             echo "存在 $LATEST 的未关闭失败 Issue，跳过本次自动升级（可手动触发强制重试）"
+          else
+            BOOL=false
           fi
+          # 布尔字符串输出：upgrade job 的 if 按 'true'/'false' 比较（此前输出 1/0 使门闩恒不拦截）
+          #
+          # Boolean string output: the upgrade job's if compares against 'true'/'false'
+          # (previously emitting 1/0 made the gate never block)
+          echo "blocked=$BOOL" >> "$GITHUB_OUTPUT"
         env:
           LATEST: ${{ steps.check.outputs.latest }}
 

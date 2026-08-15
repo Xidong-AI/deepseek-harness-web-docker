@@ -21,7 +21,13 @@ LATEST="$(npm view @deepseek-ai/dsh version)"
 [ -n "$LATEST" ] || { echo "错误：npm view 未返回版本" >&2; exit 1; }
 
 SHOULD="$("$SCRIPT_DIR/should-upgrade.sh" "$CURRENT" "$LATEST")"
+# 转为布尔字符串输出：workflow 的 if 条件按 'true'/'false' 比较（此前输出 1/0 导致条件恒 false，自动升级永不触发）
+#
+# Emit a boolean string: the workflow's if conditions compare against 'true'/'false'
+# (previously emitting 1/0 made the conditions always false, so auto-upgrade never ran)
+SHOULD_BOOL=false
+[ "$SHOULD" = "1" ] && SHOULD_BOOL=true
 
 echo "current=$CURRENT"
 echo "latest=$LATEST"
-echo "should_upgrade=$SHOULD"
+echo "should_upgrade=$SHOULD_BOOL"
