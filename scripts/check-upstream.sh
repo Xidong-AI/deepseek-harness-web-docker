@@ -14,9 +14,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CURRENT="$(grep -E '^ARG DSH_VERSION=' "$DIR/Dockerfile" | head -n1 | cut -d= -f2)"
 [ -n "$CURRENT" ] || { echo "错误：未能在 Dockerfile 找到 ARG DSH_VERSION" >&2; exit 1; }
 
-# npm view 返回 dist-tags.latest；registry 由 npm 配置决定（CI 默认 npmjs）
+# npm view 返回 dist-tags.latest；registry 由 npm 配置决定（CI 默认 npmjs 无同步延迟；
+# 若自建 runner 走镜像源如 npmmirror，dist-tags 可能有分钟级同步延迟，检测会略滞后但不误报）
 #
-# npm view returns dist-tags.latest; the registry follows npm config (npmjs by default on CI)
+# npm view returns dist-tags.latest; the registry follows npm config (npmjs by default on CI, no sync delay;
+# self-hosted runners behind mirrors like npmmirror may see minute-level dist-tags lag — detection lags, never false-positives)
 LATEST="$(npm view @deepseek-ai/dsh version)"
 [ -n "$LATEST" ] || { echo "错误：npm view 未返回版本" >&2; exit 1; }
 
