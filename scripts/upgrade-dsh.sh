@@ -19,20 +19,41 @@ OLD="$(grep -E '^ARG DSH_VERSION=' "$DIR/Dockerfile" | head -n1 | cut -d= -f2)"
 [ -n "$OLD" ] || { echo "错误：未能在 Dockerfile 找到 ARG DSH_VERSION" >&2; exit 1; }
 [ "$NEW" != "$OLD" ] || { echo "新版本与当前版本相同（$NEW），无需升级" >&2; exit 0; }
 
-FILES=(Dockerfile docker-compose.yml README.md README.zh.md)
-for f in "${FILES[@]}"; do
-  [ -f "$DIR/$f" ] || { echo "错误：缺少 $f" >&2; exit 1; }
-  # npm 版本号仅含 [0-9a-zA-Z.-]，无 sed 特殊字符，可安全作替换串
-  #
-  # npm versions only contain [0-9a-zA-Z.-], no sed metacharacters, safe as a replacement string
-  sed -i "s/${OLD}/${NEW}/g" "$DIR/$f"
-done
-
-# 原子验证：旧版本号必须全部消失，新版本号已写入
+# npm 版本号字符集为 [0-9A-Za-z.-]；先转义 OLD 为正则字面量，再以「版本边界」锚定替换：
+# 仅当 OLD 前后都不是版本字符时才替换，避免把 OLD 当作更长版本的前缀误改写
+# （如 0.1.0 不应把历史引用 0.1.0-rc.6 改成 0.1.1-rc.6）。NEW 为 npm 版本号
+# （不含 & 与 \），可直接作替换串。
 #
-# Atomic verification: the old version must be fully gone and the new version written
-LEFT="$(grep -l "$OLD" "$DIR"/Dockerfile "$DIR"/docker-compose.yml "$DIR"/README.md "$DIR"/README.zh.md 2>/dev/null || true)"
-[ -z "$LEFT" ] || { echo "错误：旧版本仍残留于 $LEFT" >&2; exit 1; }
+# npm version chars are [0-9A-Za-z.-]; escape OLD to a regex literal, then anchor on
+# version boundaries: replace OLD only when neither neighbour is a version char, so OLD
+# is never rewritten as a prefix of a longer version (e.g. 0.1.0 must not turn the
+# historical reference 0.1.0-rc.6 into 0.1.1-rc.6). NEW is an npm version (no & or \),
+# safe as a replacement string.
+ESC="$(printf '%s' "$OLD" | sed 's/[][\\^$.|*+?()]/\\&/g')"
+# Dockerfile / README：版本边界替换（见上注释）
+#
+# Dockerfile / README: version-boundary replacement (see the note above)
+for f in Dockerfile README.md README.zh.md; do
+  [ -f "$DIR/$f" ] || { echo "错误：缺少 $f" >&2; exit 1; }
+  sed -i "s/\\(^\\|[^-0-9A-Za-z.]\\)${ESC}\\([^-0-9A-Za-z.]\\|$\\)/\\1${NEW}\\2/g" "$DIR/$f"
+done
+# docker-compose.yml：版本号嵌在 ${DSH_VERSION:-OLD} 中，前置 `-` 是 bash 默认值语法，
+# 与 prerelease 内部的 `-` 无法仅凭字符类区分，故用精确上下文替换（compose 中版本号只出现于该位置）
+#
+# docker-compose.yml: the version sits inside ${DSH_VERSION:-OLD}, whose leading `-` is bash
+# default-value syntax and is indistinguishable from a prerelease `-` by character class alone,
+# so replace with an exact context match (the version appears only at that spot in compose)
+[ -f "$DIR/docker-compose.yml" ] || { echo "错误：缺少 docker-compose.yml" >&2; exit 1; }
+sed -i "s/\${DSH_VERSION:-${ESC}}/\${DSH_VERSION:-${NEW}}/g" "$DIR/docker-compose.yml"
+
+# 原子验证：作为完整版本号的 OLD 必须全部消失，新版本号已写入
+# （验证同样按版本边界/精确上下文匹配，历史引用的更长版本号不视为残留）
+#
+# Atomic verification: OLD as a full version number must be fully gone and the new one written
+# (also matched at version boundaries / exact contexts; longer historical versions are not leftovers)
+LEFT="$(grep -lE "(^|[^-0-9A-Za-z.])${ESC}([^-0-9A-Za-z.]|$)" "$DIR"/Dockerfile "$DIR"/README.md "$DIR"/README.zh.md 2>/dev/null || true)"
+LEFT_COMPOSE="$(grep -lE "\$\{DSH_VERSION:-${ESC}\}" "$DIR"/docker-compose.yml 2>/dev/null || true)"
+[ -z "$LEFT$LEFT_COMPOSE" ] || { echo "错误：旧版本仍残留于 $LEFT $LEFT_COMPOSE" >&2; exit 1; }
 grep -q "$NEW" "$DIR/Dockerfile" || { echo "错误：新版本未写入" >&2; exit 1; }
 
 echo "已升级：$OLD → $NEW（Dockerfile / docker-compose.yml / README.md / README.zh.md）"

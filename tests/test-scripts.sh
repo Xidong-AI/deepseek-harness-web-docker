@@ -56,6 +56,24 @@ assert_no_grep "README.md 旧版本已清除"        "0\.1\.0-rc\.6" "$TMP/READM
 assert_no_grep "README.zh.md 旧版本已清除"     "0\.1\.0-rc\.6" "$TMP/README.zh.md"
 assert_grep     "DESIGN.md 不受影响"           "0\.1\.0-rc\.6" "$TMP/DESIGN.md"
 
+echo "== upgrade-dsh.sh（版本边界：历史引用不被误改）=="
+TMP3="$TMP/boundary"
+mkdir -p "$TMP3"
+for f in Dockerfile README.md README.zh.md; do
+  printf 'ARG DSH_VERSION=0.1.0\n' > "$TMP3/$f"
+done
+# shellcheck disable=SC2016 # 单引号是有意的：fixture 需要字面 ${DSH_VERSION:-0.1.0}
+printf 'DSH_VERSION: ${DSH_VERSION:-0.1.0}\n' > "$TMP3/docker-compose.yml"
+printf '历史版本参考 0.1.0-rc.6 仅供说明\n' >> "$TMP3/README.md"
+"$ROOT/scripts/upgrade-dsh.sh" 0.1.1 "$TMP3" >/dev/null
+assert_grep     "新版本 0.1.1 已写入"          "ARG DSH_VERSION=0\.1\.1" "$TMP3/README.md"
+assert_grep     "compose 精确上下文已替换"     "DSH_VERSION: \${DSH_VERSION:-0\.1\.1}" "$TMP3/docker-compose.yml"
+# 独立的 0.1.0 必须消失（版本边界匹配；0.1.0-rc.6 内的子串不算）
+#
+# standalone 0.1.0 must be gone (matched at version boundaries; the substring inside 0.1.0-rc.6 doesn't count)
+assert_no_grep  "独立 0.1.0 全部替换"          "\(^\|[^-0-9A-Za-z.]\)0\.1\.0\([^-0-9A-Za-z.]\|$\)" "$TMP3/README.md"
+assert_grep     "历史引用 0.1.0-rc.6 保留"     "0\.1\.0-rc\.6" "$TMP3/README.md"
+
 echo "== upgrade-dsh.sh（同版本幂等）=="
 TMP2="$TMP/idempotent"
 mkdir -p "$TMP2"
