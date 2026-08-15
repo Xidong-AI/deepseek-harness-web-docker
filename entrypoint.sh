@@ -43,17 +43,36 @@ if [ ! -f "$DHS_HOME/AGENTS.md" ]; then
   log "已初始化 AGENTS.md（容器环境指引）"
 fi
 
-# 2. trustedHosts 注入 cordis.patch.yml（仅当文件不存在；已存在则视为用户维护）
-#    profile 其余文件（package.json/pnpm-workspace.yaml）由 dsh 首启自动补全
+# 2. trustedHosts 注入 cordis.patch.yml
+#    profile 其余文件（package.json/pnpm-workspace.yaml）由 dsh 首启自动补全，
+#    且 dsh 的 initProfile 对已存在文件绝不覆盖（"Existing files are never touched"），
+#    故此处预写安全。
+#    注入条件：patch 不存在，或为 dsh 首启生成的空模板（顶层数组 []）。
+#    已有任何条目（用户维护）或不可解析时跳过——绝不覆盖用户文件。
 #
-# 2. Inject trustedHosts into cordis.patch.yml (only when absent; existing files are treated as user-maintained)
-#    The rest of the profile (package.json/pnpm-workspace.yaml) is auto-completed by dsh on first run
+# 2. Inject trustedHosts into cordis.patch.yml
+#    The rest of the profile (package.json/pnpm-workspace.yaml) is auto-completed by dsh on first run,
+#    and dsh's initProfile never touches existing files ("Existing files are never touched"),
+#    so pre-writing here is safe.
+#    Injection happens when the patch is absent, or when it is the empty template dsh generates
+#    on first run (top-level array []). Any existing entries (user-maintained) or an unparseable
+#    file cause a skip — user files are never overwritten.
 if [ -n "${DSH_TRUSTED_HOSTS:-}" ]; then
   PROFILE_DIR="$DHS_HOME/profiles/web"
   PATCH="$PROFILE_DIR/cordis.patch.yml"
-  if [ ! -f "$PATCH" ]; then
+  INJECT=1
+  if [ -f "$PATCH" ]; then
+    PATCH_LEN="$(yq '. | length' "$PATCH" 2>/dev/null || true)"
+    if [ "$PATCH_LEN" != "0" ]; then
+      INJECT=0
+      log "cordis.patch.yml 已有内容，跳过 trustedHosts 注入（用户维护；若需变更请直接编辑该文件）"
+    fi
+  fi
+  if [ "$INJECT" = 1 ]; then
     mkdir -p "$PROFILE_DIR"
     {
+      echo "# 由 dsh-web entrypoint 自动注入（DSH_TRUSTED_HOSTS）"
+      echo "# Auto-injected by the dsh-web entrypoint (DSH_TRUSTED_HOSTS)"
       echo "- id: connection"
       echo "  config:"
       echo "    trustedHosts:"
@@ -63,15 +82,22 @@ if [ -n "${DSH_TRUSTED_HOSTS:-}" ]; then
       done
     } > "$PATCH"
     log "已注入 trustedHosts: $DSH_TRUSTED_HOSTS"
-  else
-    log "cordis.patch.yml 已存在，跳过 trustedHosts 注入（用户维护）"
   fi
 fi
 
 # 3. 修正数据卷属主（bind mount 挂整个 /home/node，首启属主可能是 root）
+#    仅当根目录属主非 1000 时全量修正；后续启动跳过——数据卷含 x-cmd 工具，
+#    全量递归 chown 在大卷上会拖慢启动
 #
 # 3. Fix data volume ownership (the whole /home/node is bind-mounted; owner may be root on first run)
-chown -R node:node /home/node
+#    Only fix recursively when the root owner is not 1000; later starts skip it —
+#    the volume holds x-cmd tools and a full recursive chown slows startup on large volumes
+if [ "$(stat -c '%u:%g' /home/node 2>/dev/null || echo '0:0')" != "1000:1000" ]; then
+  chown -R node:node /home/node
+  log "已修正数据卷属主（uid:gid → 1000:1000）"
+else
+  log "数据卷属主正确，跳过 chown"
+fi
 # ---- x-cmd：agent 自行配置运行环境的工具（幂等安装 + 系统 PATH 接入）----
 # agent 的 bash 工具环境是白名单（PATH 固定为 /usr/local/sbin:/usr/local/bin:/usr/bin，无 HOME），
 # 因此：1) 生成 HOME 注入的 x wrapper；2) 把已 use 包的 shim 软链进 /usr/local/bin。

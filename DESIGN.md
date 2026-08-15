@@ -216,4 +216,8 @@ docker compose up -d --build  # 或 docker compose up -d（用 GHCR 镜像时）
 | 数据卷布局 | bind mount 从 /home/node/.dsh 扩为整个 /home/node | x-cmd 安装于 $HOME/.x-cmd.root（硬编码 HOME 路径），需要 HOME 整体持久化；.dsh 数据兼容保留 |
 | defaults 内容 | 增加 AGENTS.md（容器环境指引，dsh 会话自动加载） | agent 需要知道容器环境限制与 x-cmd 用法 |
 | 上游版本手动升级（改 ARG 后 --build） | 新增 `upstream-check.yml` 定时任务（每日 UTC 03:00 + workflow_dispatch）与 `scripts/`（check-upstream / should-upgrade / upgrade-dsh / smoke-test / open-issue / check-issue-gate / close-stale-issues）：检测 `@deepseek-ai/dsh` dist-tags.latest 更新后自动提升 Dockerfile/compose/README 双语中的版本号，构建冒烟测试（镜像构建、dsh --version 校验、basic auth 401/200、双进程 RUNNING）通过则推送 master（触发 GHCR 自动构建），失败则创建 Issue（同版本去重）；存在同版本未关闭失败 Issue 时定时任务跳过自动升级（npm 包版本不可变，重试必失败；仅 schedule 生效，手动触发绕过供人工重试环境性失败），升级成功后自动关闭过时失败 Issue | 需求：dsh 上游自动跟进；失败不推送、master 保持已验收状态；冒烟跳过 x-cmd 首启下载（预置假 x）；DESIGN.md 历史内容不做自动替换 |
+| supervisord.conf | 无 `[rpcinterface:supervisor]` 段 | 补齐该段 | 缺段时 `docker exec supervisorctl status` 报 "did not recognize the supervisor namespace commands"（socket 通但 RPC 命名空间未注册），冒烟测试进程检查实际从未通过 |
+| 冒烟测试范围 | 仅 basic auth 401/200 + 双进程 RUNNING | 新增特权 API fence 断言（伪造 Host 直连容器内 dsh 的 `POST /api` 应 403；经 Caddy 伪造 Host/Origin 应被改写为 loopback、返回 400/404 而非 403）+ trustedHosts 注入断言；进程检查改为轮询等待（dsh 首启初始化慢于 Caddy） | 安全关键路径需回归：实测 dsh 特权 RPC 端点为 `POST /api`（GET 404，坏 payload 400/404），fence 即 DESIGN §2.1 所述 loopback 来源检查 |
+| chown 属主修正 | 每次启动无条件 `chown -R node:node /home/node` | 仅当根目录属主非 1000:1000 时全量修正，否则跳过 | 数据卷含 x-cmd 工具（数万文件），全量递归拖慢每次重启 |
+| trustedHosts 注入条件 | 仅当 `cordis.patch.yml` 不存在时注入 | 不存在**或为空模板**（顶层数组 `[]`，即 dsh 首启生成）时注入；已有内容/不可解析时跳过并提示 | dsh 首启自动生成空模板 patch（initProfile 对已存在文件不覆盖），用户首启未设变量、后设变量重启需能自动注入；已维护的 patch 绝不覆盖 |
 
