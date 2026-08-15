@@ -68,6 +68,14 @@ jobs:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
+          # gha 缓存：跨 run 复用构建层（mode=max 保留 apt/corepack 等中间层，
+          # DSH_VERSION 变化时未变层仍命中）；cache scope 为当前分支
+          #
+          # gha cache: reuse build layers across runs (mode=max keeps intermediate
+          # layers such as apt/corepack, so unchanged layers still hit when DSH_VERSION changes);
+          # cache scope is the current branch
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
