@@ -93,6 +93,8 @@ jq . data.json                # 裸命令：已启用包已软链至 /usr/local/
 - 新安装的工具本会话用 `x <pkg>` 前缀调用，容器重启后裸命令可用
 - 工具源为 x-cmd 包源（阿里云 OSS，国内可达），支持版本管理（`x env use node=v20`）
 
+**沙箱注意**：x-cmd 运行需写 `~/.x-cmd.root`（数据卷内）。文件沙箱（workspace-write）仅放行会话工作区 + `/tmp`，该目录不可写——bwrap 沙箱下 `x` 启动即报 `folder defined ___X_CMD_ROOT specified is not writable`；本镜像无 bwrap，走 landlock 沙箱，`x` 能启动但 `x env use`/`x env ls` 等写操作报 `权限不够` 失败。两种情况都需 agent 申请完整权限（审批）后才能正常使用，或将工作区选在 `/home/node` 下。
+
 容器内 agent 的环境指引见数据卷 `AGENTS.md`（dsh 会话自动加载）。
 
 

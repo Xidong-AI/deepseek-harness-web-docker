@@ -25,8 +25,10 @@ x env which <pkg>         # 查看路径
 
 工具安装持久化在数据卷（~/.x-cmd.root），容器重启/重建后保留。
 
+- **沙箱警告**：x-cmd 运行需写 `~/.x-cmd.root`。文件沙箱（workspace-write）仅放行会话工作区 + `/tmp`，该目录不可写——bwrap 沙箱下 `x` 启动即报 `folder defined ___X_CMD_ROOT specified is not writable`；本容器（无 bwrap，走 landlock）下 `x` 能启动，但 `x env use`/`x env ls` 等写操作报 `权限不够` 失败。两种情况都需申请完整权限（审批通过）后才能正常使用，或将工作区选在 `/home/node` 下。
+
 ## 限制
 
-- 无 root/apt 权限，不能安装系统级包（gcc/make 等需自定义镜像，见项目 README）；
+- 无 root/apt 权限，不能安装系统级包（gcc/make 等需自定义镜像，[见项目 README](https://github.com/Xidong-AI/deepseek-harness-web-docker/raw/refs/heads/master/README.zh.md)）；
 - 不读 shell rc 文件：每次 bash -c 为全新环境，PATH 固定（/usr/local/sbin:/usr/local/bin:/usr/bin）；
-- 文件沙箱：工作区之外的文件操作可能被拒绝（见工具描述）。
+- 文件沙箱：工作区之外的文件操作可能被拒绝（见工具描述）——包括 x-cmd 对 `~/.x-cmd.root` 的写入，沙箱下需完整权限才能用 `x`。
