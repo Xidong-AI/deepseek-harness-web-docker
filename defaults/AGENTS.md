@@ -25,7 +25,7 @@ x env which <pkg>         # 查看路径
 
 工具安装持久化在数据卷（~/.x-cmd.root），容器重启/重建后保留。
 
-- **沙箱警告**：x-cmd 运行需写 `~/.x-cmd.root`。文件沙箱（workspace-write）仅放行会话工作区 + `/tmp`，该目录不可写——bwrap 沙箱下 `x` 启动即报 `folder defined ___X_CMD_ROOT specified is not writable`；本容器（无 bwrap，走 landlock）下 `x` 能启动，但 `x env use`/`x env ls` 等写操作报 `权限不够` 失败。两种情况都需申请完整权限（审批通过）后才能正常使用，或将工作区选在 `/home/node` 下。
+- **沙箱警告**：x-cmd 运行需写 `~/.x-cmd.root`，文件沙箱（workspace-write）仅放行会话工作区 + `/tmp`，该目录不可写。bwrap 沙箱下 `x` 启动即报 `folder defined ___X_CMD_ROOT specified is not writable`；本容器（无 bwrap，走 landlock）下 `x` 能启动，**只读调用可用**（内置模块如 `x version`/`x passwd`，已启用/已缓存包的 `x <pkg>` 前缀与软链裸命令均正常），但**安装/启用新包受限**：`x env use` 报 `权限不够` 失败，`x env ls` 静默返回空。需要装新包时申请完整权限（审批通过），或将工作区选在 `/home/node` 下。
 
 ## 限制
 
