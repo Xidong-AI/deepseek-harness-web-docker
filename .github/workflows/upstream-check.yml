@@ -1,8 +1,13 @@
 # 定时检查 dsh 上游版本：有新版本 → 提升版本号 → 构建冒烟测试 → 通过则推送 master，失败则创建 Issue
-# 推送 master 会触发 docker-build.yml 自动构建 GHCR 镜像，形成「升级 → 发布」闭环
+# 推送后显式触发 docker-build.yml 发布 GHCR 镜像，形成「升级 → 发布」闭环
+# 注意：bot 用 GITHUB_TOKEN 推送的提交不会触发 docker-build.yml 的 push 事件（GitHub 递归保护），
+#       因此发布必须通过 workflow_dispatch API 显式钩住（该事件是 GITHUB_TOKEN 的例外，总是创建 run）
 #
 # Scheduled dsh upstream check: bump version on update → build & smoke test → push master on success, open an Issue on failure
-# Pushing to master triggers docker-build.yml, which builds GHCR images — an "upgrade → release" loop
+# After pushing, explicitly dispatch docker-build.yml to publish GHCR images — an "upgrade → release" loop
+# Note: commits pushed by the bot's GITHUB_TOKEN do NOT fire docker-build.yml's push event (GitHub
+#       recursion protection), so the release must be hooked explicitly via the workflow_dispatch
+#       API (the GITHUB_TOKEN exception that always creates a run)
 name: check-dsh-upstream
 
 on:
@@ -77,6 +82,7 @@ jobs:
     permissions:
       contents: write
       issues: write
+      actions: write
     steps:
       - uses: actions/checkout@v4
 
@@ -102,6 +108,20 @@ jobs:
           git push origin master
         env:
           LATEST: ${{ needs.check.outputs.latest }}
+
+      # 钩住 GHCR 发布（见文件头注释）。continue-on-error：升级推送已成功，触发失败不应把 job
+      # 标记失败——否则 failure() 会误建「构建冒烟测试失败」Issue；触发失败可在日志中排查或手动触发
+      #
+      # Hook the GHCR release (see the file header). continue-on-error: the upgrade push already
+      # succeeded, so a dispatch failure must not fail the job—otherwise failure() would falsely
+      # open a "smoke test failed" Issue; a failed dispatch can be investigated in the log or
+      # triggered manually
+      - name: 触发 GHCR 发布（docker-build.yml）
+        continue-on-error: true
+        run: |
+          gh workflow run docker-build.yml --ref master
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       # 升级已成功：旧版本的失败 Issue 均已过时，关闭以免陈旧累积
       # continue-on-error：清理失败不影响升级结果（不触发下方 failure() 步骤）

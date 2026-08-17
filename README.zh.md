@@ -12,7 +12,8 @@
 - 内置健康检查：`docker compose ps` 直接可见服务真实健康状态（带凭据穿透 basic auth 探测 dsh 响应，`starting`/`healthy`/`unhealthy`）
 - 镜像版本可 pin：构建参数 `DSH_VERSION`
 - CI 自动构建并推送 `ghcr.io/xidong-ai/deepseek-harness-web-docker`（latest + 日期时间 - 哈希 tag）
-- 定时任务每日检查 dsh 上游：有新版本自动提升 `DSH_VERSION`、构建并冒烟测试，通过则推送 master，失败则创建 Issue（存在同版本未关闭 Issue 时不再自动重试，可手动触发强制重试）
+- 定时任务每日检查 dsh 上游：有新版本自动提升 `DSH_VERSION`、构建并冒烟测试，通过则推送 master 并钩住触发 GHCR 发布，失败则创建 Issue（存在同版本未关闭 Issue 时不再自动重试，可手动触发强制重试）
+- GHCR 发布可手动触发（Actions 页「Run workflow」）或由上游升级自动钩住触发（`workflow_dispatch`）
 
 ## 快速开始
 

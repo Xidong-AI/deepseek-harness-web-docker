@@ -13,6 +13,7 @@ Containerized deployment of the [DeepSeek Harness](https://github.com/deepseek-a
 - Pinnable image version: build argument `DSH_VERSION`
 - CI automatically builds and pushes `ghcr.io/xidong-ai/deepseek-harness-web-docker` (latest + date-time-hash tags)
 - A scheduled CI job checks the dsh upstream daily: on a new version it bumps `DSH_VERSION`, builds and smoke-tests the image, pushes to master on success, or opens an Issue on failure (a failed version is not retried automatically while its Issue is open; manual dispatch bypasses the gate)
+- The GHCR release can be triggered manually (Actions tab → "Run workflow") or is hooked automatically after an upstream auto-upgrade (`workflow_dispatch`)
 
 ## Quick Start
 

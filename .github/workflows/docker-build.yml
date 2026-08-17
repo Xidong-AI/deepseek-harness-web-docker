@@ -1,13 +1,23 @@
-# 自动构建并推送 GHCR：push master 触发
+# 自动构建并推送 GHCR：push master 或手动/workflow_dispatch 触发
 # 镜像 tag：latest + 日期时间 - 提交哈希（如 20260815T0054-a1b2c3d）
+# workflow_dispatch 提供两种钩入方式：
+#   - 手动：Actions 页面点「Run workflow」或 gh workflow run docker-build.yml
+#   - 被钩：upstream-check 自动升级推送后显式触发——bot 用 GITHUB_TOKEN 推送的提交不会触发
+#           push 事件（GitHub 递归保护），而 workflow_dispatch 是 GITHUB_TOKEN 的例外，总是创建 run
 #
-# Auto-build and push to GHCR: triggered on push to master
+# Auto-build and push to GHCR: triggered on push to master or manual/API dispatch
 # Image tags: latest + datetime-commit-hash (e.g. 20260815T0054-a1b2c3d)
+# workflow_dispatch offers two hook-in paths:
+#   - Manual: click "Run workflow" in the Actions tab or gh workflow run docker-build.yml
+#   - Hooked: upstream-check dispatches explicitly after an auto-upgrade push—commits pushed by
+#             the bot's GITHUB_TOKEN do not fire the push event (GitHub recursion protection),
+#             while workflow_dispatch is the GITHUB_TOKEN exception and always creates a run
 name: build-push-ghcr
 
 on:
   push:
     branches: [master]
+  workflow_dispatch:
 
 env:
   IMAGE: ghcr.io/xidong-ai/deepseek-harness-web-docker
