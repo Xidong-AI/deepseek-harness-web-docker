@@ -30,7 +30,7 @@ docker compose up -d    # 拉取 latest 镜像并启动
 ```bash
 docker compose up -d --build
 # 或指定 dsh 版本：
-docker build --build-arg DSH_VERSION=0.1.0-rc.6 -t dsh-web:latest .
+docker build --build-arg DSH_VERSION=0.1.0-rc.7 -t dsh-web:latest .
 ```
 
 启动后浏览器访问 `http://<主机>:3080`（端口由 `.env` 的 `DSH_WEB_PORT` 控制），输入 basic auth 用户名密码。
@@ -44,7 +44,7 @@ docker build --build-arg DSH_VERSION=0.1.0-rc.6 -t dsh-web:latest .
 | `DEEPSEEK_API_KEY` | 是 | 无 | DeepSeek API Key（provider 经 apiKeyEnv 引用） |
 | `DSH_WEB_PORT` | 否 | `3080` | 宿主机对外端口（与已有服务冲突时修改） |
 | `DSH_TRUSTED_HOSTS` | 否 | 空 | 逗号分隔的额外受信 Host，注入 profile 的 `cordis.patch.yml`（仅当该文件不存在或仍为空模板时自动注入；已维护则跳过，请直接编辑该文件）；默认靠 Caddy 改写 Host/Origin 为 loopback 已覆盖常规访问 |
-| `DSH_VERSION` | 否（构建期） | `0.1.0-rc.6` | dsh 版本，修改后需 `--build` 重建 |
+| `DSH_VERSION` | 否（构建期） | `0.1.0-rc.7` | dsh 版本，修改后需 `--build` 重建 |
 
 > `.env` 含密码与 API Key，禁止提交入库。
 

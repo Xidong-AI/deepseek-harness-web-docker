@@ -30,7 +30,7 @@ docker compose up -d    # pull the latest image and start
 ```bash
 docker compose up -d --build
 # or pin a dsh version:
-docker build --build-arg DSH_VERSION=0.1.0-rc.6 -t dsh-web:latest .
+docker build --build-arg DSH_VERSION=0.1.0-rc.7 -t dsh-web:latest .
 ```
 
 After startup, open `http://<host>:3080` in a browser (the port is controlled by `DSH_WEB_PORT` in `.env`) and enter the Basic Auth username and password.
@@ -44,7 +44,7 @@ After startup, open `http://<host>:3080` in a browser (the port is controlled by
 | `DEEPSEEK_API_KEY` | Yes | None | DeepSeek API Key (referenced by the provider via apiKeyEnv) |
 | `DSH_WEB_PORT` | No | `3080` | Host port exposed to the outside (change it when it conflicts with an existing service) |
 | `DSH_TRUSTED_HOSTS` | No | Empty | Comma-separated extra trusted hosts, injected into the profile's `cordis.patch.yml` (only when the file is absent or still the empty template; user-maintained files are skipped — edit the file directly); by default Caddy rewrites Host/Origin to loopback, which covers normal access |
-| `DSH_VERSION` | No (build-time) | `0.1.0-rc.6` | dsh version; rebuild with `--build` after changing it |
+| `DSH_VERSION` | No (build-time) | `0.1.0-rc.7` | dsh version; rebuild with `--build` after changing it |
 
 > `.env` contains passwords and the API Key — never commit it to the repository.
 

@@ -7,9 +7,9 @@
 #
 # Single container: dsh (127.0.0.1:3080) + Caddy basic auth (0.0.0.0:3081), managed by supervisord
 #
-# 构建：docker build --build-arg DSH_VERSION=0.1.0-rc.6 -t dsh-web:latest .
+# 构建：docker build --build-arg DSH_VERSION=0.1.0-rc.7 -t dsh-web:latest .
 #
-# Build: docker build --build-arg DSH_VERSION=0.1.0-rc.6 -t dsh-web:latest .
+# Build: docker build --build-arg DSH_VERSION=0.1.0-rc.7 -t dsh-web:latest .
 #
 # 多阶段：builder 阶段含编译工具链（node-pty/sharp 等 native 依赖），
 # 运行镜像只 COPY 编译产物，不含 gcc/make/python-dev 痕迹
@@ -17,7 +17,7 @@
 # Multi-stage: the builder stage holds the toolchain for native deps (node-pty/sharp);
 # the runtime image only copies compiled artifacts, with no gcc/make/python-dev remnants
 
-ARG DSH_VERSION=0.1.0-rc.6
+ARG DSH_VERSION=0.1.0-rc.7
 
 # Caddy 官方镜像
 # 静态二进制，与平台无关
