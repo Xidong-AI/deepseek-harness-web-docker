@@ -77,6 +77,7 @@ dsh agents run commands inside the container through the bash tool; the availabl
 ### Preinstalled in the image
 
 - Runtime: node 22, npm, pnpm (corepack, required by `dsh plugin`), python3, Caddy, dsh
+- Build toolchain: make/gcc/g++/pkg-config (node-gyp fallback for native modules, e.g. a dsh plugin's node-pty), Rust (rustup stable minimal + rustfmt + clippy)
 - Agent tools: git, openssh-client, curl/wget (network), jq/yq (JSON/YAML), ripgrep (search), rsync (sync), procps (processes), zip/unzip/tar, file, dig, sqlite3, python3-pip, vim-tiny, ca-certificates
 
 ### Agent self-installation (x-cmd, no root required)
@@ -101,11 +102,11 @@ jq . data.json                # bare command: enabled packages are symlinked to 
 For the in-container agent environment guide, see `AGENTS.md` in the data volume (auto-loaded by dsh sessions).
 
 
-System packages that require root (build toolchain like gcc/make, editors, etc.): modify the `apt-get install` line in the `Dockerfile` and rebuild, or add a layer on top of this image:
+The image already ships a lightweight build toolchain (make/gcc/g++) and Rust, so agents can run `pnpm install`/`cargo build` to compile native modules and projects directly. Other system packages that require root can be added by modifying the `apt-get install` line in the `Dockerfile` and rebuilding, or by adding a layer on top of this image:
 
 ```dockerfile
 FROM ghcr.io/xidong-ai/deepseek-harness-web-docker:latest
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+RUN apt-get update && apt-get install -y --no-install-recommends <pkg> \
  && rm -rf /var/lib/apt/lists/*
 ```
 

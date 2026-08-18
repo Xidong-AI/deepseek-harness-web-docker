@@ -77,6 +77,7 @@ dsh 的 agent 通过 bash 工具在容器内执行命令，可用工具集 = 镜
 ### 镜像预装
 
 - 运行时：node 22、npm、pnpm（corepack，`dsh plugin` 依赖）、python3、Caddy、dsh
+- 编译工具链：make/gcc/g++/pkg-config（node-gyp 编译 native 模块兜底，如 dsh 插件的 node-pty）、Rust（rustup stable minimal + rustfmt + clippy）
 - agent 工具：git、openssh-client、curl/wget（网络）、jq/yq（JSON/YAML）、ripgrep（搜索）、rsync（同步）、procps（进程）、zip/unzip/tar、file、dig、sqlite3、python3-pip、vim-tiny、ca-certificates
 
 ### agent 自行安装（x-cmd，免 root）
@@ -101,11 +102,11 @@ jq . data.json                # 裸命令：已启用包已软链至 /usr/local/
 容器内 agent 的环境指引见数据卷 `AGENTS.md`（dsh 会话自动加载）。
 
 
-编译工具链（gcc/make）、编辑器等需 root 的系统包，修改 `Dockerfile` 的 `apt-get install` 行重建，或基于本镜像追加一层：
+镜像已内置轻量编译工具链（make/gcc/g++）与 Rust，agent 可直接 `pnpm install`/`cargo build` 编译 native 模块与项目。仍缺的其他系统包需 root 安装，可修改 `Dockerfile` 的 `apt-get install` 行重建，或基于本镜像追加一层：
 
 ```dockerfile
 FROM ghcr.io/xidong-ai/deepseek-harness-web-docker:latest
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+RUN apt-get update && apt-get install -y --no-install-recommends <pkg> \
  && rm -rf /var/lib/apt/lists/*
 ```
 

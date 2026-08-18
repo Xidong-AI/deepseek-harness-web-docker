@@ -11,11 +11,14 @@
 #
 # Build: docker build --build-arg DSH_VERSION=0.1.0-rc.7 -t dsh-web:latest .
 #
-# 多阶段：builder 阶段含编译工具链（node-pty/sharp 等 native 依赖），
-# 运行镜像只 COPY 编译产物，不含 gcc/make/python-dev 痕迹
+# 多阶段：builder 阶段编译 dsh（node-pty/sharp 等 native 依赖），
+# 运行镜像 COPY 编译产物，并保留轻量编译工具链 + Rust：agent 运行时装 native
+# 模块（dsh 插件 node-pty 等）需现场编译兜底；详见运行阶段注释
 #
-# Multi-stage: the builder stage holds the toolchain for native deps (node-pty/sharp);
-# the runtime image only copies compiled artifacts, with no gcc/make/python-dev remnants
+# Multi-stage: the builder stage compiles dsh (native deps such as node-pty/sharp);
+# the runtime image copies compiled artifacts AND keeps a lightweight toolchain + Rust,
+# so agents can compile native modules (e.g. plugin node-pty) at runtime as a fallback.
+# See the runtime stage notes for the trade-off.
 
 ARG DSH_VERSION=0.1.0-rc.7
 
@@ -35,9 +38,12 @@ ARG DSH_VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# build-essential + python3 仅用于 npm 编译，本阶段镜像不产出到运行镜像
+# build-essential + python3 仅用于本阶段编译 dsh 自带的 native 依赖（node-pty/sharp）；
+# 运行镜像另装轻量工具链（make/gcc/g++）供 agent 现场编译插件 native 依赖，见运行阶段
 #
-# build-essential + python3 are only for npm compilation; this stage's image never reaches the runtime
+# build-essential + python3 are only for compiling dsh's bundled native deps (node-pty/sharp) in this stage;
+# the runtime image installs a lightweight toolchain (make/gcc/g++) separately for agents to compile
+# plugin native deps on site — see the runtime stage
 # hadolint ignore=DL3008
 RUN apt-get update \
  && apt-get install -y --no-install-recommends build-essential python3 \
@@ -60,22 +66,32 @@ ENV DEBIAN_FRONTEND=noninteractive
 COPY --from=caddy /usr/bin/caddy /usr/bin/caddy
 
 # dsh 编译产物：node_modules（含 node-pty/sharp native 二进制）与 dsh 入口
-# 动态依赖 libstdc++/libgcc_s/glibc 由 node:22-slim 自带，运行无需编译工具链
+# 动态依赖 libstdc++/libgcc_s/glibc 由 node:22-slim 自带，dsh 核心运行无需工具链；
+# 但 agent 运行时装插件（dsh-better-sidebar 等）会触发 node-pty 现场编译
+# （prebuild 未匹配时回退 node-gyp），故运行阶段另装 make/gcc/g++（见下）
 # bin 用 RUN ln -s 重建：COPY 单文件会解引用 symlink，导致 ESM 从 /usr/local/bin/dsh
 # 解析依赖失败（node_modules 不可达）
 #
-# dsh compiled artifacts: node_modules (with node-pty/sharp native binaries) and the dsh entry
-# Dynamic deps (libstdc++/libgcc_s/glibc) ship with node:22-slim; no toolchain is needed at runtime
+# dsh compiled artifacts: node_modules (with node-pty/sharp native binaries) and the dsh entry.
+# Dynamic deps (libstdc++/libgcc_s/glibc) ship with node:22-slim, so dsh core needs no toolchain;
+# however, agents installing plugins at runtime (e.g. dsh-better-sidebar) trigger on-site node-pty
+# compilation (node-gyp fallback when no prebuild matches), hence make/gcc/g++ in the runtime stage.
 # The bin is rebuilt with RUN ln -s: COPY of a single file dereferences the symlink, breaking
-# ESM resolution from /usr/local/bin/dsh (node_modules unreachable)
+# ESM resolution from /usr/local/bin/dsh (node_modules unreachable).
 COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s ../lib/node_modules/@deepseek-ai/dsh/lib/bin.js /usr/local/bin/dsh
 
 # 运行依赖与 agent 工具集
-# 全部可在白名单 bash 环境直接调用；无 build-essential（编译只在 builder 阶段）
+# 全部可在白名单 bash 环境直接调用（PATH 固定 /usr/local/sbin:/usr/local/bin:/usr/bin）
+# 轻量编译工具链（make/gcc/g++/pkg-config）：agent 运行时装 dsh 插件触发 native 模块
+# 现场编译（node-pty prebuild 未匹配时回退 node-gyp），缺 make 会直接报错；不装完整
+# build-essential 以控制体积（省 dpkg-dev/gdb 等）
 #
 # Runtime Dependencies and Agent Toolset
-# All directly callable in the whitelisted bash environment; no build-essential (compilation stays in the builder stage)
+# All directly callable in the whitelisted bash environment (PATH fixed to /usr/local/sbin:/usr/local/bin:/usr/bin).
+# Lightweight toolchain (make/gcc/g++/pkg-config): agents installing dsh plugins trigger on-site native
+# module compilation (node-gyp fallback when node-pty prebuild doesn't match); a missing make fails hard.
+# Full build-essential is avoided to keep the image slim (drops dpkg-dev/gdb etc.).
 #
 # - supervisor（PID 1 进程管理，Python 包，python3 保留）
 # - git/openssh-client：git 工作流（GIT_PAGER=cat 表明 dsh 预期 git 存在）
@@ -83,13 +99,14 @@ RUN ln -s ../lib/node_modules/@deepseek-ai/dsh/lib/bin.js /usr/local/bin/dsh
 # - procps(ps/kill/pgrep)：进程排查；ripgrep：代码搜索；rsync：同步
 # - yq：YAML 处理；file：类型识别；dnsutils(dig)：DNS 排查；sqlite3：数据
 # - python3-pip：python 包管理（pip install --user）；vim-tiny：vi 编辑器兜底
+# - make/gcc/g++/pkg-config：node-gyp 编译 native 模块（node-pty 等）兜底
 #
 # 有意不 pin apt 版本：依赖 Debian 源自动更新；npm 版本已由 ARG DSH_VERSION pin
 #
 # Apt versions are deliberately unpinned: Debian sources auto-update; npm is pinned by ARG DSH_VERSION
 # hadolint ignore=DL3008
 RUN apt-get update \
- && apt-get install -y --no-install-recommends supervisor ca-certificates git openssh-client curl wget jq unzip zip procps ripgrep rsync yq file dnsutils sqlite3 python3-pip vim-tiny python3 \
+ && apt-get install -y --no-install-recommends supervisor ca-certificates git openssh-client curl wget jq unzip zip procps ripgrep rsync yq file dnsutils sqlite3 python3-pip vim-tiny python3 make gcc g++ pkg-config \
  && rm -rf /var/lib/apt/lists/*
 
 # pnpm
@@ -103,6 +120,32 @@ ENV COREPACK_HOME=/usr/local/share/corepack
 RUN corepack enable \
  && corepack prepare pnpm@10 --activate \
  && rm -rf /root/.cache
+
+# Rust 工具链（rustup 官方方式，minimal profile + rustfmt/clippy）
+# agent 运行时可直接 cargo build/rustc 编译项目；profile minimal 不含 rust-docs 以控制体积
+# RUSTUP_HOME/CARGO_HOME 指向系统目录并 chown 给 node：agent 无 root 也能 rustup component add
+# agent 的 bash PATH 白名单固定（/usr/local/sbin:/usr/local/bin:/usr/bin），故把 cargo/bin 下
+# 可执行文件软链到 /usr/local/bin（与 x-cmd shim 同一接入点策略）
+# RUSTUP_DIST_SERVER 可经 build-arg 覆盖（国内构建若 static.rust-lang.org 不可达可设 rsproxy.cn）
+#
+# Rust toolchain (official rustup, minimal profile + rustfmt/clippy)
+# Agents can cargo build/rustc directly at runtime; minimal profile omits rust-docs to save space.
+# RUSTUP_HOME/CARGO_HOME point to system dirs and are chowned to node, so non-root agents can
+# `rustup component add` too. The agent's bash PATH is a fixed whitelist
+# (/usr/local/sbin:/usr/local/bin:/usr/bin), so cargo/bin executables are symlinked into
+# /usr/local/bin (same entry-point strategy as the x-cmd shims).
+# RUSTUP_DIST_SERVER can be overridden via build-arg (set to rsproxy.cn if static.rust-lang.org
+# is unreachable in your build environment).
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo
+ARG RUSTUP_DIST_SERVER=https://static.rust-lang.org
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path \
+                 --component rustfmt --component clippy \
+ && find /usr/local/cargo/bin -maxdepth 1 -type f -executable \
+      -exec ln -sf {} /usr/local/bin/ \; \
+ && chown -R node:node /usr/local/rustup /usr/local/cargo \
+ && rm -rf /usr/local/rustup/tmp/* /usr/local/cargo/registry/cache
 
 # 运行用户与数据目录
 # 非 root 运行用户：复用官方镜像自带的 node 用户（uid 1000，home /home/node）

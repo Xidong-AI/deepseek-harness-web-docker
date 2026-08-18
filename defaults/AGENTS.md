@@ -5,6 +5,7 @@
 ## 预装工具
 
 - 运行时：node 22、npm、pnpm（corepack）、python3、Caddy
+- 编译工具链：make/gcc/g++/pkg-config（node-gyp 编译 native 模块兜底，如 dsh 插件的 node-pty）、Rust（rustup stable minimal + rustfmt + clippy，`cargo build`/`rustc` 直接可用）
 - 常用工具：git、openssh-client、curl、wget、jq、yq、ripgrep、rsync、ps/pgrep、zip/unzip/tar、file、dig、sqlite3、pip、vim-tiny
 
 ## 自行安装工具（x-cmd，免 root）
@@ -29,6 +30,6 @@ x env which <pkg>         # 查看路径
 
 ## 限制
 
-- 无 root/apt 权限，不能安装系统级包（gcc/make 等需自定义镜像，[见项目 README](https://github.com/Xidong-AI/deepseek-harness-web-docker/raw/refs/heads/master/README.zh.md)）；
+- 无 root/apt 权限，不能安装系统级包；但编译工具链（make/gcc/g++）与 Rust 已预装，可直接 `pnpm install`/`cargo build` 编译 native 模块与项目。其余系统包需自定义镜像，[见项目 README](https://github.com/Xidong-AI/deepseek-harness-web-docker/raw/refs/heads/master/README.zh.md)；
 - 不读 shell rc 文件：每次 bash -c 为全新环境，PATH 固定（/usr/local/sbin:/usr/local/bin:/usr/bin）；
 - 文件沙箱：工作区之外的文件操作可能被拒绝（见工具描述）——包括 x-cmd 对 `~/.x-cmd.root` 的写入，沙箱下需完整权限才能用 `x`。
