@@ -1,5 +1,7 @@
 # DeepSeek Harness Web Docker
 
+![banner](docs/banner-en.svg)
+
 > [English](README.md) | [中文](README.zh.md)
 
 Containerized deployment of the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) web client: a single container bundles dsh + Caddy Basic Auth, with configuration and project/session data persisted, and CI automatically pushes GHCR images.

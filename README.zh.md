@@ -1,5 +1,7 @@
 # DeepSeek Harness Web Docker
 
+![banner](docs/banner-zh.svg)
+
 > [English](README.md) | [中文](README.zh.md)
 
 容器化部署 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）Web 客户端：单容器内含 dsh + Caddy basic auth，配置与项目/会话数据持久化，CI 自动推送 GHCR 镜像。
