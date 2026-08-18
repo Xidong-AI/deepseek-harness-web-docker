@@ -47,14 +47,26 @@ echo "== upgrade-dsh.sh（文件更新）=="
 for f in Dockerfile docker-compose.yml README.md README.zh.md DESIGN.md; do
   cp "$ROOT/$f" "$TMP/"
 done
+# 当前版本号从 fixture Dockerfile 动态提取：升级脚本可能升级到任意上游版本，
+# 硬编码版本会让「旧版本清除」断言失效或空转
+#
+# Current version is read from the fixture Dockerfile: the upgrade script may bump to any
+# upstream version, so hardcoding one would make the "old version gone" asserts stale or vacuous
+CUR_VERSION="$(grep -E '^ARG DSH_VERSION=' "$TMP/Dockerfile" | head -n1 | cut -d= -f2)"
+ESC_VERSION="$(printf '%s' "$CUR_VERSION" | sed 's/[][\\^$.|*+?()]/\\&/g')"
 "$ROOT/scripts/upgrade-dsh.sh" 0.2.0 "$TMP" >/dev/null
-assert_no_grep "Dockerfile 旧版本已清除"      "0\.1\.0-rc\.6" "$TMP/Dockerfile"
+assert_no_grep "Dockerfile 旧版本已清除"      "$ESC_VERSION"  "$TMP/Dockerfile"
 assert_grep     "Dockerfile 新版本已写入"      "0\.2\.0"       "$TMP/Dockerfile"
-assert_no_grep "docker-compose.yml 旧版本清除" "0\.1\.0-rc\.6" "$TMP/docker-compose.yml"
+assert_no_grep "docker-compose.yml 旧版本清除" "$ESC_VERSION"  "$TMP/docker-compose.yml"
 assert_grep     "docker-compose.yml 新版本写入" "0\.2\.0"       "$TMP/docker-compose.yml"
-assert_no_grep "README.md 旧版本已清除"        "0\.1\.0-rc\.6" "$TMP/README.md"
-assert_no_grep "README.zh.md 旧版本已清除"     "0\.1\.0-rc\.6" "$TMP/README.zh.md"
-assert_grep     "DESIGN.md 不受影响"           "0\.1\.0-rc\.6" "$TMP/DESIGN.md"
+assert_no_grep "README.md 旧版本已清除"        "$ESC_VERSION"  "$TMP/README.md"
+assert_no_grep "README.zh.md 旧版本已清除"     "$ESC_VERSION"  "$TMP/README.zh.md"
+# DESIGN.md 是历史设计稿，不在升级范围：升级前后内容必须完全一致
+# （不依赖任何版本号，避免历史引用随版本演进失效）
+#
+# DESIGN.md is a historical design doc, out of the upgrade scope: its content must be
+# byte-identical after an upgrade (independent of any version number)
+assert_eq "DESIGN.md 不受影响" "$(md5sum < "$ROOT/DESIGN.md")" "$(md5sum < "$TMP/DESIGN.md")"
 
 echo "== upgrade-dsh.sh（版本边界：历史引用不被误改）=="
 TMP3="$TMP/boundary"
@@ -80,7 +92,14 @@ mkdir -p "$TMP2"
 for f in Dockerfile docker-compose.yml README.md README.zh.md; do
   cp "$ROOT/$f" "$TMP2/"
 done
-"$ROOT/scripts/upgrade-dsh.sh" 0.1.0-rc.6 "$TMP2" > "$TMP2/idempotent.out" 2>&1 || true
+# 以 fixture 中的当前版本为参数：同版本必须走「无需升级」分支（版本号动态提取，
+# 与 upgrade-dsh.sh 内部读取 Dockerfile 的方式一致，避免硬编码随上游升级失配）
+#
+# Pass the fixture's own current version: an equal version must take the "no upgrade needed"
+# branch. The version is read the same way upgrade-dsh.sh reads the Dockerfile, so the test
+# cannot drift when the upstream version bumps
+CUR_VERSION="$(grep -E '^ARG DSH_VERSION=' "$TMP2/Dockerfile" | head -n1 | cut -d= -f2)"
+"$ROOT/scripts/upgrade-dsh.sh" "$CUR_VERSION" "$TMP2" > "$TMP2/idempotent.out" 2>&1 || true
 assert_eq "同版本返回提示且不报错" 0 "$?"
 assert_grep "同版本提示输出" "无需升级" "$TMP2/idempotent.out"
 
