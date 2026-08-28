@@ -39,6 +39,14 @@ assert_eq "patch 升级应升级"          1 "$("$SU" 0.1.0 0.1.1)"
 assert_eq "minor 升级应升级"          1 "$("$SU" 0.1.0 0.2.0)"
 assert_eq "上游回退（降级）不升级"    0 "$("$SU" 0.1.0-rc.6 0.1.0-rc.5)"
 assert_eq "正式版后的 rc 不升级"      0 "$("$SU" 0.1.0 0.1.0-rc.9)"
+# 同元组更高 rc 原本就能过；跨元组 prerelease 才是 range 默认规则的盲区
+# （>0.1.0-rc.7 不匹配 0.1.1-rc.2，正是自动升级卡住的原因）
+#
+# A higher rc in the same tuple already passed; cross-tuple prereleases are the
+# range default's blind spot (>0.1.0-rc.7 does not match 0.1.1-rc.2 — why auto-upgrade stalled)
+assert_eq "同元组更高 rc 应升级"      1 "$("$SU" 0.1.0-rc.7 0.1.0-rc.8)"
+assert_eq "跨元组 prerelease 应升级"  1 "$("$SU" 0.1.0-rc.7 0.1.1-rc.2)"
+assert_eq "跨元组 alpha 应升级"       1 "$("$SU" 0.1.0-rc.7 0.1.2-alpha.1)"
 
 echo "== upgrade-dsh.sh（文件更新）=="
 # fixture：直接从仓库复制当前文件（模拟"升级前"状态）
