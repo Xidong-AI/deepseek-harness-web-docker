@@ -7,9 +7,9 @@
 #
 # Single container: dsh (127.0.0.1:3080) + Caddy basic auth (0.0.0.0:3081), managed by supervisord
 #
-# 构建：docker build --build-arg DSH_VERSION=0.1.0-rc.7 -t dsh-web:latest .
+# 构建：docker build --build-arg DSH_VERSION=0.1.1-rc.2 -t dsh-web:latest .
 #
-# Build: docker build --build-arg DSH_VERSION=0.1.0-rc.7 -t dsh-web:latest .
+# Build: docker build --build-arg DSH_VERSION=0.1.1-rc.2 -t dsh-web:latest .
 #
 # 多阶段：builder 阶段编译 dsh（node-pty/sharp 等 native 依赖），
 # 运行镜像 COPY 编译产物，并保留轻量编译工具链 + Rust：agent 运行时装 native
@@ -20,7 +20,7 @@
 # so agents can compile native modules (e.g. plugin node-pty) at runtime as a fallback.
 # See the runtime stage notes for the trade-off.
 
-ARG DSH_VERSION=0.1.0-rc.7
+ARG DSH_VERSION=0.1.1-rc.2
 
 # Caddy 官方镜像
 # 静态二进制，与平台无关
