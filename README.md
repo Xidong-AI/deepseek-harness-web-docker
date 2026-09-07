@@ -29,12 +29,14 @@ cp .env.example .env    # edit DEEPSEEK_API_KEY (DSH_AUTH_USER/PASSWORD are now 
 docker compose up -d    # pull the latest image and start
 ```
 
+> ⚠️ **升级警告 — 升级到含 dsh 0.1.2-rc.1+ 鉴权迁移的版本时,必须先 `git pull` 同步 `docker-compose.yml` / `Caddyfile` / `entrypoint.sh` / `entrypoint.sh 内的 token 抓取后台任务`,仅 `docker compose pull` 拉新 image 配旧 compose 文件会导致 healthcheck 永远 unhealthy 且 web 服务裸奔(无鉴权)。** 具体见 PR #7 的 commit message 与 DESIGN.md §10 的版本演进记录。
+
 ### Option 2: Build locally
 
 ```bash
 docker compose up -d --build
 # or pin a dsh version:
-docker build --build-arg DSH_VERSION=${DSH_VERSION:-latest} -t dsh-web:latest .
+docker build --build-arg DSH_VERSION=0.1.2-rc.1 -t dsh-web:latest .
 ```
 
 After startup, **read the one-time launch URL** with one of:
@@ -123,7 +125,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends <pkg> \
 
 ## Changing the Password / Resetting Auth
 
-**dsh 0.1.2-rc.1+ (current)**: dsh's persistent cookie is the auth. To reset (e.g. after a suspected leak), delete the data volume's credentials file and recreate the data volume — `docker compose down -v && docker compose up -d`. The next browser visit must use the new one-time token URL (`docker exec dsh-web cat /home/node/.dsh/web-launch-url.txt`).
+**dsh 0.1.2-rc.1+ (current)**: dsh's persistent cookie is the auth, kept in `./data/.dsh/.credentials.yaml`. To reset after a suspected leak, you **must** rebuild the data volume — `docker compose down -v && docker compose up -d`. The next browser visit uses a new one-time token URL (`docker exec dsh-web cat /home/node/.dsh/web-launch-url.txt`).
+
+> ⚠️ `down -v` is destructive: it also wipes `./data/.dsh/` (settings, profiles, sessions, agent-installed tools under `~/.x-cmd.root`). There is no lighter reset path — the entrypoint's token-extraction background task is one-shot (`grep -m1`), so a single-file `.credentials.yaml` delete plus container restart will NOT refresh the token URL. If you need to preserve session data, take a backup of `./data/.dsh/` before `down -v` and restore specific subpaths afterwards (e.g. `.dsh/profiles/`, `.dsh/AGENTS.md`).
 
 **Up to dsh 0.1.1 series (rollback)**: edit `DSH_AUTH_PASSWORD` in `.env`, then run `docker compose up -d` (the entrypoint regenerates the hash automatically).
 

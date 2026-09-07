@@ -20,7 +20,7 @@
 # so agents can compile native modules (e.g. plugin node-pty) at runtime as a fallback.
 # See the runtime stage notes for the trade-off.
 
-ARG DSH_VERSION=0.1.1-rc.2
+ARG DSH_VERSION=0.1.2-rc.1
 
 # Caddy 官方镜像
 # 静态二进制，与平台无关

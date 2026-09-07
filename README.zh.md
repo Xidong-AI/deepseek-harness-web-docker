@@ -29,12 +29,14 @@ cp .env.example .env    # 编辑 DEEPSEEK_API_KEY（DSH_AUTH_USER/PASSWORD 自 0
 docker compose up -d    # 拉取 latest 镜像并启动
 ```
 
+> ⚠️ **升级警告 — 升级到含 dsh 0.1.2-rc.1+ 鉴权迁移的版本时,必须先 `git pull` 同步 `docker-compose.yml` / `Caddyfile` / `entrypoint.sh` 内的 token 抓取后台任务,仅 `docker compose pull` 拉新 image 配旧 compose 文件会导致 healthcheck 永远 unhealthy 且 web 服务裸奔(无鉴权)。** 具体见 PR #7 的 commit message 与 DESIGN.md §10 的版本演进记录。
+
 ### 方式二：本地构建
 
 ```bash
 docker compose up -d --build
 # 或指定 dsh 版本：
-docker build --build-arg DSH_VERSION=${DSH_VERSION:-latest} -t dsh-web:latest .
+docker build --build-arg DSH_VERSION=0.1.2-rc.1 -t dsh-web:latest .
 ```
 
 启动后**先取一次性启动 URL**，任选一种方式：
@@ -123,7 +125,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends <pkg> \
 
 ## 修改密码 / 重置鉴权
 
-**dsh 0.1.2-rc.1+（当前）**：dsh 持久 cookie 是鉴权载体。怀疑泄露需重置时，删除数据卷的凭据文件并重建数据卷 — `docker compose down -v && docker compose up -d`。下次浏览器访问需用新的一次性 token URL（`docker exec dsh-web cat /home/node/.dsh/web-launch-url.txt`）。
+**dsh 0.1.2-rc.1+（当前）**：dsh 持久 cookie 是鉴权载体，存于 `./data/.dsh/.credentials.yaml`。怀疑泄露需重置时，**必须**重建数据卷 — `docker compose down -v && docker compose up -d`。下次浏览器访问需用新的一次性 token URL（`docker exec dsh-web cat /home/node/.dsh/web-launch-url.txt`）。
+
+> ⚠️ `down -v` 是破坏性操作：会同时清空 `./data/.dsh/`（settings、profiles、sessions，及 agent 自装工具 `~/.x-cmd.root`）。目前没有更轻量的重置路径 — entrypoint 的 token 抓取后台任务是单次执行（`grep -m1`），仅删 `.credentials.yaml` 后重启容器**不会**重抓 token URL。如需保留会话数据，先备份 `./data/.dsh/`，重置后按需恢复子路径（如 `.dsh/profiles/`、`.dsh/AGENTS.md`）。
 
 **dsh ≤0.1.1 系列（回退）**：编辑 `.env` 的 `DSH_AUTH_PASSWORD`，然后 `docker compose up -d`（entrypoint 自动重新生成哈希）。
 

@@ -13,7 +13,7 @@ services:
     build:
       context: .
       args:
-        DSH_VERSION: ${DSH_VERSION:-0.1.1-rc.2}
+        DSH_VERSION: ${DSH_VERSION:-0.1.2-rc.1}
     container_name: dsh-web
     restart: unless-stopped
     ports:
@@ -25,14 +25,14 @@ services:
       - HOME=/home/node
     # 健康检查：跟冒烟脚本同一条路径——抓 dsh 启动的一次性 token URL，用 token 换 cookie，
     # 再带 cookie 测根路径 200 算健康。
-    # 自 0.1.2-rc.1 起 caddy 不再 basic auth（鉴权迁回 dsh 自身），DSH_AUTH_USER/PASSWORD 不再使用。
-    # 早于 0.1.2-rc.1 的版本没有 token 机制，healthcheck 走 token 流程会失败（容器不健康）——
-    # 所以这个 healthcheck 默认是为 0.1.2-rc.1+ 设计的；回退到更早版本时需要改 healthcheck
+    # 自 0.1.2 系列起 caddy 不再 basic auth（鉴权迁回 dsh 自身），DSH_AUTH_USER/PASSWORD 不再使用。
+    # 早于 0.1.2 的版本没有 token 机制，healthcheck 走 token 流程会失败（容器不健康）——
+    # 所以这个 healthcheck 默认是为 0.1.2+ 设计的；回退到更早版本时需要改 healthcheck
     # start_period 覆盖 dsh 首启初始化（bundles 安装可能 1-2 分钟）
     #
     # Health check follows the smoke-test path: read dsh's one-time token URL, exchange it
     # for a cookie via 303, then GET / with the cookie and expect 200.
-    # 0.1.2-rc.1+ removed caddy basic_auth (auth moved into dsh itself), so DSH_AUTH_USER/PASSWORD
+    # 0.1.2 series removed caddy basic_auth (auth moved into dsh itself), so DSH_AUTH_USER/PASSWORD
     # are unused. Earlier versions have no token mechanism — the healthcheck would fail, so
     # rollbacks must update it too.
     # start_period covers dsh's first-run init (bundle installation may take 1-2 minutes).

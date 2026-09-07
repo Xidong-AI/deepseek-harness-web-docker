@@ -21,25 +21,30 @@ log() { echo "[entrypoint] $*"; }
 # so a rollback to ≤0.1.1-rc.2 still works without .env surgery
 : "${DEEPSEEK_API_KEY:?必须设置 DEEPSEEK_API_KEY（.env）}"
 
-# ---- basic auth：明文密码 → bcrypt 哈希（注入 Caddyfile 环境变量，0.1.2-rc.1+ 无害保留）----
-# 0.1.2-rc.1 起 caddy 不再 basic auth（见 Caddyfile 注释），但 Caddyfile 仍期望 DSH_AUTH_HASH
-# 占位符存在以保格式正确；未提供 DSH_AUTH_PASSWORD 时写一个不会匹配的占位值
-# （Caddy 仍解析，但任何 basic auth 尝试必然 401 失败，相当于关闭）
+# ---- basic auth：明文密码 → bcrypt 哈希（为回退兼容保留，0.1.2-rc.1+ 不被任何消费者使用）----
+# 0.1.2-rc.1+ 的 Caddyfile 已不引用 {$DSH_AUTH_HASH}（Caddyfile 块本身不出现该占位符，
+# 见 PR #7 改动）。本块在当前 image 是无消费者的导出，仅在回退到 ≤0.1.1-rc.2 流程时
+# 才被旧 Caddyfile 使用——回退需要从 git history 拉回旧 Caddyfile（basic_auth 块 + 占位符）
+# 一起恢复，因此 DSH_AUTH_HASH 仍必须在此处派生（否则回退到旧 image 时 caddy 启动报错）。
+# 视为「回退兼容位的准备代码」而非「当前生效的鉴权逻辑」——删它会破坏回退路径
 #
-# ---- Basic auth: plaintext password → bcrypt hash (injected into Caddyfile env vars, harmless since 0.1.2-rc.1) ----
-# Caddy 0.1.2-rc.1+ doesn't basic-auth (see Caddyfile), but the Caddyfile still references
-# {$DSH_AUTH_HASH} for parser compatibility. When DSH_AUTH_PASSWORD is unset, substitute a
-# placeholder that cannot match any input (bcrypt-formatted dummy) so any stray basic-auth
-# probe is deterministically 401 — effectively disabled
+# ---- Basic auth hash: retained for rollback compatibility, no current consumer ----
+# The 0.1.2-rc.1+ Caddyfile does not reference {$DSH_AUTH_HASH}. This block is a no-consumer
+# export in the current image; it only feeds the old Caddyfile (≤0.1.1-rc.2) on rollback,
+# which requires restoring the basic_auth block from git history. Delete this block only
+# if rollback support to ≤0.1.1-rc.2 is also dropped.
 if [ -n "${DSH_AUTH_PASSWORD:-}" ]; then
   DSH_AUTH_HASH="$(caddy hash-password --plaintext "$DSH_AUTH_PASSWORD" | tail -n 1)"
 else
-  # 长度匹配 bcrypt 输出但内容不匹配任何密码（让 caddy 解析通过，验证永远失败）
+  # 占位 bcrypt 哈希：格式合法（$2a$10$... + 22 字符 salt）但内容不匹配任何输入。
+  # 当前 image 不消费此变量；若被误用到旧 Caddyfile，任何 basic auth 试探必 401，等效关闭
   #
-  # Matches bcrypt output length but never matches any input (lets caddy parse, validation always fails)
+  # Placeholder bcrypt hash: well-formed (passes parser) but never matches any input.
+  # Current image has no consumer; if accidentally used by an old Caddyfile, deterministically
+  # 401s any basic-auth probe (effectively closed)
   # shellcheck disable=SC2016 # 单引号是有意的：占位 bcrypt 哈希（$2a$10$...）需要字面 $ 字符
   DSH_AUTH_HASH='$2a$10$invalidplaceholderhashthatnevermatches0000000000000'
-  log "DSH_AUTH_PASSWORD 未设置：caddy basic auth 已被 0.1.2-rc.1 移除，此处仅占位"
+  log "DSH_AUTH_PASSWORD 未设置：DSH_AUTH_HASH 写占位值（回退兼容位；当前 image 不使用）"
 fi
 export DSH_AUTH_HASH
 
