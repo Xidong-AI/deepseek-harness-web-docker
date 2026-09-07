@@ -7,11 +7,22 @@
 # 测试注入：设置 GH=/path/to/mock 可替换 gh 命令（用于单测）
 #
 # Test injection: set GH=/path/to/mock to substitute the gh command (used by unit tests)
+#
+# GitHub Actions 兜底：在 CI 环境中 gh 默认从 GH_TOKEN 取凭据；若调用方未显式设置
+# （早期版本漏配），自动回退到 GITHUB_TOKEN。这是双层防御：GH_TOKEN 优先，未设置则用 GITHUB_TOKEN，
+# 调用方仍可显式传 GH_TOKEN 覆盖（例如指向 PAT）
+#
+# GitHub Actions fallback: gh reads GH_TOKEN for credentials by default. If a caller forgets
+# to set it (an earlier workflow did), fall back to GITHUB_TOKEN. Belt-and-suspenders:
+# GH_TOKEN wins when set; otherwise GITHUB_TOKEN is used; callers can still pin GH_TOKEN
+# explicitly (e.g. to a PAT)
 set -euo pipefail
 
 LATEST="$1"
 CURRENT="$2"
 GH_BIN="${GH:-gh}"
+GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+export GH_TOKEN
 TITLE="[自动升级] dsh 上游 $LATEST 构建冒烟测试失败"
 
 EXISTING="$("$GH_BIN" issue list --state open --search "in:title \"$TITLE\"" --json number -q '.[0].number' 2>/dev/null || true)"
