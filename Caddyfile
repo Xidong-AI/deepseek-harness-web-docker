@@ -2,30 +2,40 @@
 #
 # Reverse proxy configuration
 #
-# DSH 反向代理：basic auth + 转发到容器内 dsh 127.0.0.1:3080
+# DSH 反向代理：纯反代（无 basic auth，鉴权在 dsh 自身完成）
 #
-# DSH reverse proxy: basic auth + forwarding to the in-container dsh at 127.0.0.1:3080
+# DSH reverse proxy: pure proxy (no basic auth; authentication is enforced by dsh itself)
+#
+# 0.1.2-rc.1 起鉴权迁回 dsh：浏览器需先用 `?token=<一次性>` 命中 dsh，由 dsh 派发持久 cookie；
+# 旧版本（≤0.1.1-rc.2）的 caddy basic auth 与 dsh 0.1.2-rc.1 的 token/cookie 鉴权重复，
+# 保留 caddy basic_auth 会拦截首次访问根路径的浏览器跳转（用户根本看不到 dsh 的 token URL）。
+# 因此取消 basic auth；DSH_AUTH_USER/PASSWORD/HASH 现在不再被 caddy 使用，但 .env 仍保留以
+# 兼容未来回退到旧版本
+#
+# Since 0.1.2-rc.1, authentication moved into dsh: the browser must first hit dsh with
+# `?token=<one-time>` and receive a persistent cookie. The old caddy basic_auth (≤0.1.1-rc.2)
+# now duplicates dsh 0.1.2-rc.1's token/cookie auth and intercepts the browser's first
+# root-path redirect, hiding dsh's token URL from the user. Drop basic_auth here;
+# DSH_AUTH_USER/PASSWORD/HASH are unused by caddy now but kept in .env for forward/back compat
 #
 # 注意：
 # - 容器内必须监听 0.0.0.0（Docker 端口映射 DNAT 到容器 eth0，bind loopback 会拒接映射流量）
+# - DSH 0.1.2-rc.1 的 web 模式强制 loopback bind（上游显式拒绝 --host 0.0.0.0），
+#   反代是当前唯一让外部访问到 3080 的方式
 # - DSH 特权 API（settings.*/credentials.*）只接受 loopback 来源（防 DNS rebinding），
 #   必须把 Host/Origin 改写为 127.0.0.1:3080 使 dsh 视为本机来源；
 #   Origin 必须与改写后 Host 同源，否则 fence 的 Origin 检查仍 403
-# - bcrypt 哈希含 $ 字符，必须经环境变量注入（{$DSH_AUTH_HASH}），不能直写本文件
 # - http:// 前缀显式声明纯 HTTP 站点，禁用 auto-HTTPS/本地 CA
 #
 # Notes:
 # - Must listen on 0.0.0.0 inside the container (Docker port mapping DNATs to container eth0; binding loopback rejects mapped traffic)
+# - DSH 0.1.2-rc.1's web mode is hard-locked to loopback bind (upstream explicitly rejects
+#   --host 0.0.0.0); reverse-proxy is currently the only path to expose 3080 externally
 # - DSH privileged APIs (settings.*/credentials.*) accept only loopback origins (anti-DNS-rebinding),
 #   Host/Origin must be rewritten to 127.0.0.1:3080 so dsh treats it as a local origin;
 #   Origin must match the rewritten Host, otherwise the fence's Origin check still returns 403
-# - bcrypt hashes contain $, so they must be injected via environment variable ({$DSH_AUTH_HASH}), never written inline
 # - The http:// prefix explicitly declares a plain-HTTP site, disabling auto-HTTPS/local CA
 http://:3081 {
-	basic_auth {
-		{$DSH_AUTH_USER} {$DSH_AUTH_HASH}
-	}
-
 	reverse_proxy 127.0.0.1:3080 {
 		header_up Host 127.0.0.1:3080
 		header_up Origin http://127.0.0.1:3080

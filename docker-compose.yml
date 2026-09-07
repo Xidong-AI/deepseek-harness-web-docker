@@ -23,18 +23,24 @@ services:
     env_file: .env
     environment:
       - HOME=/home/node
-    # 健康检查：带凭据穿透 basic auth 请求 Caddy 反代，仅 200（dsh 真实响应）算健康；
-    # 401 是 Caddy 层拒绝、502 是 dsh 未就绪，均不算健康。
-    # $$ 转义为字面 $，运行时在容器内展开为 env_file 注入的凭据。
-    # start_period 覆盖 dsh 首启初始化（bundles 安装可能 1-2 分钟）。
+    # 健康检查：跟冒烟脚本同一条路径——抓 dsh 启动的一次性 token URL，用 token 换 cookie，
+    # 再带 cookie 测根路径 200 算健康。
+    # 自 0.1.2-rc.1 起 caddy 不再 basic auth（鉴权迁回 dsh 自身），DSH_AUTH_USER/PASSWORD 不再使用。
+    # 早于 0.1.2-rc.1 的版本没有 token 机制，healthcheck 走 token 流程会失败（容器不健康）——
+    # 所以这个 healthcheck 默认是为 0.1.2-rc.1+ 设计的；回退到更早版本时需要改 healthcheck
+    # start_period 覆盖 dsh 首启初始化（bundles 安装可能 1-2 分钟）
     #
-    # Health check: request through Caddy with credentials; only 200 (dsh actually responding)
-    # counts as healthy — 401 is rejected at the Caddy layer and 502 means dsh is not up yet.
-    # $$ escapes to a literal $, expanded at runtime to the credentials injected via env_file.
+    # Health check follows the smoke-test path: read dsh's one-time token URL, exchange it
+    # for a cookie via 303, then GET / with the cookie and expect 200.
+    # 0.1.2-rc.1+ removed caddy basic_auth (auth moved into dsh itself), so DSH_AUTH_USER/PASSWORD
+    # are unused. Earlier versions have no token mechanism — the healthcheck would fail, so
+    # rollbacks must update it too.
     # start_period covers dsh's first-run init (bundle installation may take 1-2 minutes).
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -u \"$${DSH_AUTH_USER}:$${DSH_AUTH_PASSWORD}\" http://127.0.0.1:3081/ >/dev/null 2>&1 || exit 1"]
+      test:
+        - "CMD-SHELL"
+        - "set -e; url=$$(cat /home/node/.dsh/web-launch-url.txt 2>/dev/null || true); [ -n \"$$url\" ] || exit 1; cookie=$$(mktemp); code=$$(curl -sS -c \"$$cookie\" -o /dev/null -w '%{http_code}' \"$$url\"); [ \"$$code\" = \"303\" ] || { rm -f \"$$cookie\"; exit 1; }; code=$$(curl -sS -b \"$$cookie\" -o /dev/null -w '%{http_code}' http://127.0.0.1:3081/); rm -f \"$$cookie\"; [ \"$$code\" = \"200\" ]"
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
       start_period: 120s
