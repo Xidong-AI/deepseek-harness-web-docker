@@ -20,6 +20,10 @@ cleanup() {
   # first line, swallow internal cleanup failures into a warn, and `return` it so it
   # propagates to Actions as the real failure rather than a silent success
   local rc=$?
+  # cookie 文件：0.1.2-rc.1+ 鉴权流程创建的临时 cookie，与 SMOKE_HOME 一起删即可
+  # (cookie jar 在 SMOKE_PARENT 下，独立 mktemp 但跟着 SMOKE_HOME 的 rm -rf 也走
+  # 因为 mktemp -p 选了 SMOKE_PARENT；不过保险起见显式删一次)
+  [ -n "${SMOKE_COOKIE:-}" ] && [ -f "$SMOKE_COOKIE" ] && rm -f "$SMOKE_COOKIE" 2>/dev/null || true
   docker rm -f "$CID" >/dev/null 2>&1 || true
   if [ -n "${SMOKE_HOME:-}" ] && [ -d "$SMOKE_HOME" ]; then
     # 先放宽权限再递归删：容器内 uid 1000 (node) 写下的子文件可能只对本人可写，
@@ -78,46 +82,117 @@ PORT="$(docker port "$CID" 3081 | head -n1 | sed 's/.*://')"
 echo "    容器 $CID 已启动，映射端口 $PORT"
 
 echo "==> 等待服务就绪（最多 240s）"
-# 仅 200 视为就绪：502（Caddy 已起但 dsh 未就绪）与 000（未监听）都继续等；
-# 401 是 Caddy basic auth 层拒绝、不经过反代，也不能代表 dsh 就绪
+# 等三件事之一：1) 200（≤0.1.1-rc.2 旧 caddy basic auth 通过）2) 401（0.1.2-rc.1+ 路径，
+# caddy 活，dsh 鉴权拒绝无 token）3) entrypoint 后台抓到的 web-launch-url.txt 出现
+# （dsh 启动后 5-30 秒内）。任一即就绪。502/000 继续等
 #
-# Only 200 means ready: 502 (Caddy up but dsh not yet) and 000 (not listening) keep waiting;
-# 401 is rejected at the Caddy basic-auth layer without touching the proxy, so it proves nothing
-#
-# 阈值从 120s 提到 240s：0.1.2-rc.1 在 GitHub Actions runner 上首启需 ~150s
-# (x-cmd 80MB 下载 + dsh web bundles 懒加载)，120s 反复误报上游慢。240s 留一倍余量，
-# 真挂的场景仍会超时但能区分「慢」vs「挂」
-#
-# Threshold raised 120s→240s: dsh 0.1.2-rc.1 first boot on GitHub Actions runner
-# takes ~150s (80MB x-cmd download + dsh web bundles lazy load). 120s kept misfiring
-# on upstream slowness; 240s leaves 1× headroom while still failing on real hangs
+# Wait for any of: 1) 200 (≤0.1.1-rc.2 old caddy basic-auth) 2) 401 (0.1.2-rc.1+,
+# caddy alive, dsh rejects no-token) 3) web-launch-url.txt written (5-30 s after dsh).
+# Any one means "ready". 502/000 keep waiting.
 READY=0
 LAST_CODE=000
+URL_FILE="$SMOKE_HOME/.dsh/web-launch-url.txt"
 START_TS="$(date +%s)"
 for _ in $(seq 1 120); do
-  CODE="$(curl -s -u admin:smoketest -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/" || true)"
+  CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/" || true)"
   LAST_CODE="$CODE"
-  if [ "$CODE" = "200" ]; then READY=1; break; fi
+  if [ "$CODE" = "200" ] || [ "$CODE" = "401" ] || [ -s "$URL_FILE" ]; then
+    READY=1; break
+  fi
   sleep 2
 done
 if [ "$READY" != 1 ]; then
   ELAPSED=$(( $(date +%s) - START_TS ))
-  echo "错误：服务 ${ELAPSED}s 内未就绪（最后一次 HTTP code=$LAST_CODE）" >&2
+  echo "错误：服务 ${ELAPSED}s 内 Caddy 仍未监听（最后一次 HTTP code=$LAST_CODE，token 文件未出现）" >&2
+  echo "  （502/000 = 仍在启动；持续 502 = 上游启动慢/挂）" >&2
   docker logs "$CID" 2>&1 | tail -30 >&2
   exit 1
 fi
 
-echo "==> basic auth：无凭据应 401"
-CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")"
-[ "$CODE" = "401" ] || { echo "错误：期望 401 实际 $CODE" >&2; exit 1; }
+# 版本分叉：检测 dsh 版本决定鉴权流程
+# dsh <0.1.2-rc.1 (e.g. 0.1.1-rc.2)：用 caddy basic auth（DSH_AUTH_USER/PASSWORD）
+# dsh >=0.1.2-rc.1：用 token+cookie（dsh 0.1.2-rc.1 引入的一次性 token + 持久 cookie，
+#   caddy 0.1.2-rc.1+ 不再 basic auth，DSH_AUTH_USER/PASSWORD 保留为兼容位但 caddy 不用）
+#
+# Version fork: pick the auth flow by dsh version
+# dsh <0.1.2-rc.1 (e.g. 0.1.1-rc.2): caddy basic auth
+# dsh >=0.1.2-rc.1: token + cookie (dsh 0.1.2-rc.1 one-time token + persistent cookie;
+#   caddy 0.1.2-rc.1+ no longer basic-auths, DSH_AUTH_USER/PASSWORD are kept for compat)
+case "$VERSION" in
+  0.1.0-*|0.1.1-*)
+    # 旧版鉴权：basic auth（dsh ≤0.1.1-rc.2）
+    echo "==> 旧版鉴权：basic auth（dsh $VERSION）"
+    echo "==> basic auth：无凭据应 401"
+    CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")"
+    [ "$CODE" = "401" ] || { echo "错误：期望 401 实际 $CODE" >&2; exit 1; }
 
-echo "==> basic auth：带凭据应 200"
-CODE="$(curl -s -u admin:smoketest -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")"
-[ "$CODE" = "200" ] || { echo "错误：期望 200 实际 $CODE" >&2; exit 1; }
+    echo "==> basic auth：带凭据应 200"
+    CODE="$(curl -s -u admin:smoketest -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")"
+    [ "$CODE" = "200" ] || {
+      echo "错误：带 admin:smoketest 凭据应返 200，实际 $CODE" >&2
+      docker logs "$CID" 2>&1 | tail -30 >&2
+      exit 1
+    }
+    # basic auth 路径：API fence 步骤用 basic auth
+    AUTH_FLAGS=(-u admin:smoketest)
+    ;;
+  *)
+    # 新版鉴权：token + cookie（dsh ≥0.1.2-rc.1）
+    echo "==> 新版鉴权：token + cookie（dsh $VERSION）"
+    # 等 token URL 文件（entrypoint 后台任务写入，dsh 启动后 1-30 秒内出现）
+    # Wait for token URL file (entrypoint's background task writes it 1-30 s after dsh starts)
+    for _ in $(seq 1 60); do
+      [ -s "$URL_FILE" ] && break
+      sleep 1
+    done
+    if [ ! -s "$URL_FILE" ]; then
+      echo "错误：dsh 启动后 60s 内未在 $URL_FILE 捕获到 ?token= URL" >&2
+      echo "--- 容器 web-server.log 后 30 行（dsh 启动日志 tee）---" >&2
+      tail -30 "$SMOKE_HOME/.dsh/web-server.log" >&2 || true
+      docker logs "$CID" 2>&1 | tail -30 >&2
+      exit 1
+    fi
+    LAUNCH_URL="$(cat "$URL_FILE")"
+    echo "    抓取到 dsh 启动 URL: $LAUNCH_URL"
+    # 一次性 token 换持久 cookie：GET ?token=XXX → 303 + Set-Cookie
+    # Exchange one-time token for persistent cookie: GET ?token=XXX → 303 + Set-Cookie
+    SMOKE_COOKIE="$(mktemp -p "$SMOKE_PARENT" smoke-cookie-XXXXXX)"
+    CODE="$(curl -sS -c "$SMOKE_COOKIE" -o /dev/null -w '%{http_code}' "$LAUNCH_URL" || true)"
+    if [ "$CODE" != "303" ]; then
+      echo "错误：带 token 访问应返 303 重定向，实际 $CODE" >&2
+      cat "$SMOKE_COOKIE" >&2 || true
+      docker logs "$CID" 2>&1 | tail -20 >&2
+      exit 1
+    fi
+    if ! grep -q "dsh" "$SMOKE_COOKIE" 2>/dev/null; then
+      echo "错误：token 交换后未拿到 Set-Cookie（dsh 应发 HttpOnly cookie）" >&2
+      cat "$SMOKE_COOKIE" >&2 || true
+      exit 1
+    fi
+    echo "==> 鉴权：带 cookie 应 200"
+    CODE="$(curl -sS -b "$SMOKE_COOKIE" -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")"
+    if [ "$CODE" != "200" ]; then
+      echo "错误：带 cookie 应返 200，实际 $CODE" >&2
+      echo "--- 诊断：直连容器内 dsh 3080（带 cookie）---" >&2
+      docker exec "$CID" curl -sS -b "$SMOKE_COOKIE" -o /dev/null -w '  HTTP %{http_code}\n' "http://127.0.0.1:3080/" >&2 || true
+      docker logs "$CID" 2>&1 | tail -20 | sed 's/^/    /' >&2
+      exit 1
+    fi
+    echo "    鉴权通过（cookie 持久化到 $SMOKE_HOME/.dsh/.credentials.yaml）"
+    # 新版路径：API fence 步骤用 cookie
+    AUTH_FLAGS=(-b "$SMOKE_COOKIE")
+    ;;
+esac
 
 echo "==> 特权 API fence：伪造 Host 直连容器内 dsh 应 403（fence 拒绝未授权来源）"
-# 不经 Caddy 直连 127.0.0.1:3080，伪造浏览器 Host=evil.com——dsh 视其为非本机来源
-CODE="$(docker exec "$CID" curl -s -o /dev/null -w '%{http_code}' -X POST \
+# 不经 Caddy 直连 127.0.0.1:3080，伪造浏览器 Host=evil.com——dsh 视其为非本机来源。
+# 此处用容器内 curl（不经 caddy，caddy 不参与；用 cookie/basic auth 都无法过 dsh 的
+# Host 来源检查——fence 拒绝非 loopback Host；仅 0.1.2-rc.1+ 需 cookie，0.1.1-rc.2 用 basic auth）
+#
+# Bypass Caddy: curl dsh 3080 directly from inside the container. dsh's fence rejects
+# non-loopback Host. Auth flavor: 0.1.1-rc.2 uses basic auth, 0.1.2-rc.1+ uses cookie.
+# Either way, the fake Host=evil.com is what we test, not auth.
+CODE="$(docker exec "$CID" curl -s "${AUTH_FLAGS[@]}" -o /dev/null -w '%{http_code}' -X POST \
   -H 'Host: evil.com' -H 'Content-Type: application/json' -d '{}' \
   "http://127.0.0.1:3080/api")"
 [ "$CODE" = "403" ] || { echo "错误：fence 未拒绝伪造 Host（期望 403 实际 $CODE）" >&2; exit 1; }
@@ -125,7 +200,7 @@ CODE="$(docker exec "$CID" curl -s -o /dev/null -w '%{http_code}' -X POST \
 echo "==> 特权 API fence：经 Caddy 伪造 Host/Origin 应被改写为 loopback（非 403）"
 # 浏览器形态请求经 Caddy：Host/Origin 被改写为 127.0.0.1:3080，fence 通过；
 # 若 Caddyfile 的 header_up 两行失效，此处将返回 403——即改写链路回归
-CODE="$(curl -s -u admin:smoketest -o /dev/null -w '%{http_code}' -X POST \
+CODE="$(curl -s "${AUTH_FLAGS[@]}" -o /dev/null -w '%{http_code}' -X POST \
   -H 'Host: evil.com' -H 'Origin: http://127.0.0.1:3080' \
   -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT/api")"
 [ "$CODE" = "400" ] || [ "$CODE" = "404" ] || { echo "错误：期望改写生效（400/404，fence 通过后坏 payload 的正常响应）实际 $CODE" >&2; exit 1; }

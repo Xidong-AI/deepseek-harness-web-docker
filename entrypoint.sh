@@ -1,24 +1,51 @@
 #!/usr/bin/env bash
 # 容器入口脚本
-# dsh-web 容器入口：校验必需变量 → 生成 bcrypt → 首启初始化数据卷 → 启动 supervisord
+# dsh-web 容器入口：校验必需变量 → 可选 bcrypt → 首启初始化数据卷 → 启动 supervisord
+# dsh 启动后，后台抓取 0.1.2-rc.1 的一次性 token URL 写到 $DHS_HOME/web-launch-url.txt
 #
 # Container Entrypoint Script
-# dsh-web container entrypoint: validate required env vars → generate bcrypt → initialize the data volume on first run → start supervisord
+# dsh-web container entrypoint: validate required env vars → optional bcrypt → initialize the data volume on first run → start supervisord
+# Once dsh starts, a background tail greps the 0.1.2-rc.1 one-time token URL and persists
+# it to $DHS_HOME/web-launch-url.txt so operators can read it (see the post-supervisord block)
 set -euo pipefail
 
 log() { echo "[entrypoint] $*"; }
 
 # ---- 必需变量校验 ----
+# DEEPSEEK_API_KEY 是 dsh 运行时必需；DSH_AUTH_USER / DSH_AUTH_PASSWORD 自 0.1.2-rc.1
+# 不再被 caddy 使用（鉴权迁回 dsh 自身），改为可选保留以便回退到 ≤0.1.1-rc.2 时继续生效
 #
 # ---- Required variable validation ----
-: "${DSH_AUTH_USER:?必须设置 DSH_AUTH_USER（.env）}"
-: "${DSH_AUTH_PASSWORD:?必须设置 DSH_AUTH_PASSWORD（.env）}"
+# DEEPSEEK_API_KEY is required by dsh at runtime. DSH_AUTH_USER / DSH_AUTH_PASSWORD are
+# no longer used by caddy since 0.1.2-rc.1 (auth moved into dsh itself) but kept optional
+# so a rollback to ≤0.1.1-rc.2 still works without .env surgery
 : "${DEEPSEEK_API_KEY:?必须设置 DEEPSEEK_API_KEY（.env）}"
 
-# ---- basic auth：明文密码 → bcrypt 哈希（注入 Caddyfile 环境变量）----
+# ---- basic auth：明文密码 → bcrypt 哈希（为回退兼容保留，0.1.2-rc.1+ 不被任何消费者使用）----
+# 0.1.2-rc.1+ 的 Caddyfile 已不引用 {$DSH_AUTH_HASH}（Caddyfile 块本身不出现该占位符，
+# 见 PR #7 改动）。本块在当前 image 是无消费者的导出，仅在回退到 ≤0.1.1-rc.2 流程时
+# 才被旧 Caddyfile 使用——回退需要从 git history 拉回旧 Caddyfile（basic_auth 块 + 占位符）
+# 一起恢复，因此 DSH_AUTH_HASH 仍必须在此处派生（否则回退到旧 image 时 caddy 启动报错）。
+# 视为「回退兼容位的准备代码」而非「当前生效的鉴权逻辑」——删它会破坏回退路径
 #
-# ---- Basic auth: plaintext password → bcrypt hash (injected into Caddyfile env vars) ----
-DSH_AUTH_HASH="$(caddy hash-password --plaintext "$DSH_AUTH_PASSWORD" | tail -n 1)"
+# ---- Basic auth hash: retained for rollback compatibility, no current consumer ----
+# The 0.1.2-rc.1+ Caddyfile does not reference {$DSH_AUTH_HASH}. This block is a no-consumer
+# export in the current image; it only feeds the old Caddyfile (≤0.1.1-rc.2) on rollback,
+# which requires restoring the basic_auth block from git history. Delete this block only
+# if rollback support to ≤0.1.1-rc.2 is also dropped.
+if [ -n "${DSH_AUTH_PASSWORD:-}" ]; then
+  DSH_AUTH_HASH="$(caddy hash-password --plaintext "$DSH_AUTH_PASSWORD" | tail -n 1)"
+else
+  # 占位 bcrypt 哈希：格式合法（$2a$10$... + 22 字符 salt）但内容不匹配任何输入。
+  # 当前 image 不消费此变量；若被误用到旧 Caddyfile，任何 basic auth 试探必 401，等效关闭
+  #
+  # Placeholder bcrypt hash: well-formed (passes parser) but never matches any input.
+  # Current image has no consumer; if accidentally used by an old Caddyfile, deterministically
+  # 401s any basic-auth probe (effectively closed)
+  # shellcheck disable=SC2016 # 单引号是有意的：占位 bcrypt 哈希（$2a$10$...）需要字面 $ 字符
+  DSH_AUTH_HASH='$2a$10$invalidplaceholderhashthatnevermatches0000000000000'
+  log "DSH_AUTH_PASSWORD 未设置：DSH_AUTH_HASH 写占位值（回退兼容位；当前 image 不使用）"
+fi
 export DSH_AUTH_HASH
 
 # ---- 数据卷首启初始化（/home/node/.dsh，node 用户为 uid 1000）----
@@ -153,8 +180,46 @@ EOF
   log "x-cmd 就绪（已启用包：$pkg_list）"
 fi
 
+# ---- dsh 0.1.2-rc.1 一次性 token 提取后台任务 ----
+# dsh 启动时打印 `dsh web: http://127.0.0.1:3080/?token=XXX`，但因 dsh 强制 loopback bind
+# （上游拒 --host 0.0.0.0），外部浏览器拿不到这个 URL；supervisord 把 dsh 输出 tee 到
+# $DHS_HOME/web-server.log（见 supervisord.conf），这里起一个后台 tail 任务：
+# 1) 等文件出现（dsh 可能要 30+ 秒才就绪）
+# 2) grep 一次 ?token=… 并写入 $DHS_HOME/web-launch-url.txt
+# 3) 写完后退出（任务只做一次：首启一次性 token 即可让浏览器完成 cookie 交换，
+#    后续重启 cookie 已持久化在 $DHS_HOME/.credentials.yaml，无需重抓）
+#
+# ---- Background task: extract dsh 0.1.2-rc.1's one-time token URL ----
+# dsh prints `dsh web: http://127.0.0.1:3080/?token=XXX` on startup, but since dsh 0.1.2-rc.1
+# hard-binds to loopback (upstream refuses --host 0.0.0.0), external browsers can't see it.
+# supervisord tees dsh's output to $DHS_HOME/web-server.log; we spawn a background tail that
+# (1) waits for the file (dsh may take 30+ s), (2) greps the token URL once, (3) writes it
+# to $DHS_HOME/web-launch-url.txt, then exits. One-time is enough: the first exchange
+# persists a cookie in $DHS_HOME/.credentials.yaml that survives restarts.
+# 0.1.1-rc.2 doesn't print this URL, so on older dsh the file stays empty — harmless.
+WEB_LOG="$DHS_HOME/web-server.log"
+WEB_URL_FILE="$DHS_HOME/web-launch-url.txt"
+touch "$WEB_LOG"  # 让 tail -F 立即可订阅（dsh 启动后追加）
+(
+  # 在子 shell 中等 + 抓 + 写 + 退出；不影响 entrypoint 主体
+  #
+  # In a subshell: wait + grep + write + exit. Doesn't block the main entrypoint
+  set +e  # 关闭子 shell 严格模式：grep 没匹配时正常返回非零
+  url="$(tail -F -n 0 -- "$WEB_LOG" 2>/dev/null | grep -m1 -oE 'http://127\.0\.0\.1:[0-9]+/\?token=[A-Za-z0-9_-]{43}')"
+  if [ -n "${url:-}" ]; then
+    printf '%s\n' "$url" > "$WEB_URL_FILE"
+    chmod 644 "$WEB_URL_FILE"
+    log "已抓取 dsh 启动 URL: $url"
+    log "  写入 $WEB_URL_FILE（外部用户首次访问需先访问该 URL 拿 cookie）"
+  else
+    log "未在 dsh 启动日志中捕获到 ?token= URL（可能 dsh <0.1.2-rc.1，无 token 鉴权）"
+  fi
+) &
+disown || true
+log "dsh token 提取后台任务已启动（pid=$!），结果写入 $WEB_URL_FILE"
+
 # ---- 启动 supervisord（dsh + caddy）----
 #
 # ---- Start supervisord (dsh + caddy) ----
-log "启动 supervisord（DSH_AUTH_USER=$DSH_AUTH_USER，对外端口由 compose 映射）"
+log "启动 supervisord（DSH_AUTH_USER=${DSH_AUTH_USER:-<unset,0.1.2-rc.1+ 不再使用>}，对外端口由 compose 映射）"
 exec supervisord -c /etc/supervisor/conf.d/dsh.conf

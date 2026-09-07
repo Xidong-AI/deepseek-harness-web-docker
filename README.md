@@ -4,14 +4,15 @@
 
 > [English](README.md) | [中文](README.zh.md)
 
-Containerized deployment of the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) web client: a single container bundles dsh + Caddy Basic Auth, with configuration and project/session data persisted, and CI automatically pushes GHCR images.
+Containerized deployment of the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) web client: a single container bundles dsh + Caddy (pure reverse proxy, no auth) with configuration and project/session data persisted, and CI automatically pushes GHCR images.
 
 ## Features
 
-- Self-contained single container: dsh (loopback only, inside the container) + Caddy username/password Basic Auth
+- Self-contained single container: dsh (loopback only, inside the container) + Caddy pure reverse proxy (Host/Origin rewritten to loopback for the dsh anti-DNS-rebinding fence)
+- **Authentication since dsh 0.1.2-rc.1**: moved into dsh itself. On first start, dsh prints a one-time `?token=…` URL; the browser exchanges it for a persistent cookie (survives restarts). Caddy basic auth was removed in 0.1.2-rc.1+ (would have intercepted the browser's first redirect and hidden the token URL)
 - Configuration and project/session data persisted: bind mount `./data` → `/home/node` (the whole HOME: settings.yaml, API Key, profiles, sessions, storages, plus agent-installed tools under `~/.x-cmd.root`)
 - Runs as non-root (uid 1000); dsh is not exposed directly
-- Built-in health check: `docker compose ps` shows the real service health (`starting`/`healthy`/`unhealthy`), probing dsh through basic auth with credentials
+- Built-in health check: `docker compose ps` shows the real service health (`starting`/`healthy`/`unhealthy`), exchanging the one-time token for a cookie and probing dsh
 - Pinnable image version: build argument `DSH_VERSION`
 - CI automatically builds and pushes `ghcr.io/xidong-ai/deepseek-harness-web-docker` (latest + date-time-hash tags)
 - A scheduled CI job checks the dsh upstream daily: on a new version it bumps `DSH_VERSION`, builds and smoke-tests the image, pushes to master on success, or opens an Issue on failure (a failed version is not retried automatically while its Issue is open; manual dispatch bypasses the gate)
@@ -24,30 +25,42 @@ Containerized deployment of the [DeepSeek Harness](https://github.com/deepseek-a
 ```bash
 git clone https://github.com/Xidong-AI/deepseek-harness-web-docker
 cd deepseek-harness-web-docker
-cp .env.example .env    # edit DSH_AUTH_USER / DSH_AUTH_PASSWORD / DEEPSEEK_API_KEY
+cp .env.example .env    # edit DEEPSEEK_API_KEY (DSH_AUTH_USER/PASSWORD are now optional, only used on rollback to ≤0.1.1 series)
 docker compose up -d    # pull the latest image and start
 ```
+
+> ⚠️ **升级警告 — 升级到含 dsh 0.1.2-rc.1+ 鉴权迁移的版本时,必须先 `git pull` 同步 `docker-compose.yml` / `Caddyfile` / `entrypoint.sh` / `entrypoint.sh 内的 token 抓取后台任务`,仅 `docker compose pull` 拉新 image 配旧 compose 文件会导致 healthcheck 永远 unhealthy 且 web 服务裸奔(无鉴权)。** 具体见 PR #7 的 commit message 与 DESIGN.md §10 的版本演进记录。
 
 ### Option 2: Build locally
 
 ```bash
 docker compose up -d --build
 # or pin a dsh version:
-docker build --build-arg DSH_VERSION=0.1.1-rc.2 -t dsh-web:latest .
+docker build --build-arg DSH_VERSION=0.1.2-rc.1 -t dsh-web:latest .
 ```
 
-After startup, open `http://<host>:3080` in a browser (the port is controlled by `DSH_WEB_PORT` in `.env`) and enter the Basic Auth username and password.
+After startup, **read the one-time launch URL** with one of:
+
+```bash
+docker compose logs dsh-web | grep 'dsh web:'         # dsh prints it on startup
+# or
+docker exec dsh-web cat /home/node/.dsh/web-launch-url.txt
+```
+
+Then open the printed URL (e.g. `http://<host>:3080/?token=…`) in a browser. The browser is redirected (HTTP 303) to `/` with a persistent cookie set; subsequent visits work without the token. The cookie lives in `./data/.dsh/.credentials.yaml` and survives container restarts (re-roll the token URL each time you recreate the data volume from scratch). The port is `DSH_WEB_PORT` (default 3080).
+
+> **Up to dsh 0.1.1 series** (rollback): open `http://<host>:3080` and use Caddy basic auth (the `DSH_AUTH_USER` / `DSH_AUTH_PASSWORD` in `.env`).
 
 ## Environment Variables (.env)
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `DSH_AUTH_USER` | Yes | `admin` | Basic Auth username |
-| `DSH_AUTH_PASSWORD` | Yes | None | Basic Auth plaintext password (bcrypt hash generated automatically at container startup) |
+| `DSH_AUTH_USER` | No (since 0.1.2-rc.1) | `admin` | Was: Basic Auth username. Now kept only for rollback to ≤0.1.1 series; ignored on 0.1.2-rc.1+ |
+| `DSH_AUTH_PASSWORD` | No (since 0.1.2-rc.1) | None | Was: Basic Auth plaintext password (bcrypt hash auto-generated). Now kept only for rollback to ≤0.1.1 series |
 | `DEEPSEEK_API_KEY` | Yes | None | DeepSeek API Key (referenced by the provider via apiKeyEnv) |
 | `DSH_WEB_PORT` | No | `3080` | Host port exposed to the outside (change it when it conflicts with an existing service) |
 | `DSH_TRUSTED_HOSTS` | No | Empty | Comma-separated extra trusted hosts, injected into the profile's `cordis.patch.yml` (only when the file is absent or still the empty template; user-maintained files are skipped — edit the file directly); by default Caddy rewrites Host/Origin to loopback, which covers normal access |
-| `DSH_VERSION` | No (build-time) | `0.1.1-rc.2` | dsh version; rebuild with `--build` after changing it |
+| `DSH_VERSION` | No (build-time) | Upstream latest | dsh version; rebuild with `--build` after changing it |
 
 > `.env` contains passwords and the API Key — never commit it to the repository.
 
@@ -110,9 +123,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends <pkg> \
  && rm -rf /var/lib/apt/lists/*
 ```
 
-## Changing the Password
+## Changing the Password / Resetting Auth
 
-Edit `DSH_AUTH_PASSWORD` in `.env`, then run `docker compose up -d` (the entrypoint regenerates the hash automatically).
+**dsh 0.1.2-rc.1+ (current)**: dsh's persistent cookie is the auth, kept in `./data/.dsh/.credentials.yaml`. To reset after a suspected leak, you **must** rebuild the data volume — `docker compose down -v && docker compose up -d`. The next browser visit uses a new one-time token URL (`docker exec dsh-web cat /home/node/.dsh/web-launch-url.txt`).
+
+> ⚠️ `down -v` is destructive: it also wipes `./data/.dsh/` (settings, profiles, sessions, agent-installed tools under `~/.x-cmd.root`). There is no lighter reset path — the entrypoint's token-extraction background task is one-shot (`grep -m1`), so a single-file `.credentials.yaml` delete plus container restart will NOT refresh the token URL. If you need to preserve session data, take a backup of `./data/.dsh/` before `down -v` and restore specific subpaths afterwards (e.g. `.dsh/profiles/`, `.dsh/AGENTS.md`).
+
+**Up to dsh 0.1.1 series (rollback)**: edit `DSH_AUTH_PASSWORD` in `.env`, then run `docker compose up -d` (the entrypoint regenerates the hash automatically).
 
 ## Acknowledgements
 
