@@ -144,6 +144,33 @@ MOCK_LOG="$TMP/mock2.log" MOCK_LIST_OUT='[{"number":7}]' GH="$MOCK_GH" \
 assert_grep "已有同版本 Issue 时跳过"         "已存在同版本 Issue #7" "$TMP/issue2.out"
 assert_no_grep "去重时不调用 create"          "issue create" "$TMP/mock2.log"
 
+# GitHub Actions 兜底：仅设 GITHUB_TOKEN 时，脚本应将其映射为 GH_TOKEN 并透传给 gh
+# (upstream-check.yml 早期版本漏配 env，导致 exit 4 的根因)
+#
+# GitHub Actions fallback: when only GITHUB_TOKEN is set, the script must surface it as
+# GH_TOKEN to gh. (This is the root cause of the upstream-check.yml exit-4 failure before
+# the env was wired up)
+GH_TOKEN_GUARD="$TMP/gh-token-guard"
+cat > "$GH_TOKEN_GUARD" <<'GUARD'
+#!/usr/bin/env bash
+echo "GH_TOKEN=${GH_TOKEN-unset}" >> "${GUARD_LOG:?}"
+exec "$GH_REAL" "$@"
+GUARD
+chmod +x "$GH_TOKEN_GUARD"
+GUARD_LOG="$TMP/mock_guard.log" MOCK_LOG="$TMP/mock_guard_gh.log" MOCK_LIST_OUT='[]' \
+  GH="$GH_TOKEN_GUARD" GH_REAL="$MOCK_GH" \
+  GITHUB_TOKEN=ghp_ci_fallback \
+  "$OPEN_ISSUE" 0.2.0 0.1.0-rc.6 > "$TMP/issue_guard.out" 2>&1
+assert_grep "GITHUB_TOKEN 兜底为 GH_TOKEN" "GH_TOKEN=ghp_ci_fallback" "$TMP/mock_guard.log"
+# 显式 GH_TOKEN 应优先于 GITHUB_TOKEN（避免 CI 中被无关变量意外覆盖）
+#
+# Explicit GH_TOKEN must win over GITHUB_TOKEN (so unrelated CI vars cannot clobber it)
+GUARD_LOG="$TMP/mock_guard2.log" MOCK_LOG="$TMP/mock_guard2_gh.log" MOCK_LIST_OUT='[]' \
+  GH="$GH_TOKEN_GUARD" GH_REAL="$MOCK_GH" \
+  GH_TOKEN=ghp_explicit GITHUB_TOKEN=ghp_should_lose \
+  "$OPEN_ISSUE" 0.2.0 0.1.0-rc.6 > "$TMP/issue_guard2.out" 2>&1
+assert_grep "显式 GH_TOKEN 优先" "GH_TOKEN=ghp_explicit" "$TMP/mock_guard2.log"
+
 echo "== check-issue-gate.sh (mock gh)=="
 GATE="$ROOT/scripts/check-issue-gate.sh"
 GATE_LIST='[{"title":"[自动升级] dsh 上游 0.2.0 构建冒烟测试失败","number":5}]'

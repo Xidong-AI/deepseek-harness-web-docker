@@ -142,3 +142,10 @@ jobs:
         env:
           LATEST: ${{ needs.check.outputs.latest }}
           CURRENT: ${{ needs.check.outputs.current }}
+          # GH_TOKEN 显式透传：与「触发 GHCR 发布」对齐，避免 gh 因无凭据报错
+          # (open-issue.sh 内部亦有 GITHUB_TOKEN 兜底，这是双层防御)
+          #
+          # Pass GH_TOKEN explicitly: matches the "Hook GHCR release" step; prevents gh from
+          # failing for lack of credentials. open-issue.sh also falls back to GITHUB_TOKEN,
+          # so this is belt-and-suspenders
+          GH_TOKEN: ${{ github.token }}
