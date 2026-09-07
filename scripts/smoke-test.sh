@@ -78,42 +78,58 @@ PORT="$(docker port "$CID" 3081 | head -n1 | sed 's/.*://')"
 echo "    容器 $CID 已启动，映射端口 $PORT"
 
 echo "==> 等待服务就绪（最多 240s）"
-# 仅 200 视为就绪：502（Caddy 已起但 dsh 未就绪）与 000（未监听）都继续等；
-# 401 是 Caddy basic auth 层拒绝、不经过反代，也不能代表 dsh 就绪
+# 就绪 = Caddy 在听 3081。200（链路全通）和 401（basic auth 拒绝但端口活了）都算就绪，
+# 因为后续 basic auth 断言会自然区分这两条路径。502（Caddy 在但 dsh 还没就绪）和
+# 000（未监听）继续等。这是 dsh 0.1.2-rc.1 学到的：上游 dsh 启动后 web 鉴权可能挂
+# （持续 401），caddy 自身是活的
 #
-# Only 200 means ready: 502 (Caddy up but dsh not yet) and 000 (not listening) keep waiting;
-# 401 is rejected at the Caddy basic-auth layer without touching the proxy, so it proves nothing
-#
-# 阈值从 120s 提到 240s：0.1.2-rc.1 在 GitHub Actions runner 上首启需 ~150s
-# (x-cmd 80MB 下载 + dsh web bundles 懒加载)，120s 反复误报上游慢。240s 留一倍余量，
-# 真挂的场景仍会超时但能区分「慢」vs「挂」
-#
-# Threshold raised 120s→240s: dsh 0.1.2-rc.1 first boot on GitHub Actions runner
-# takes ~150s (80MB x-cmd download + dsh web bundles lazy load). 120s kept misfiring
-# on upstream slowness; 240s leaves 1× headroom while still failing on real hangs
+# Ready = Caddy is listening on 3081. Both 200 (full chain) and 401 (basic-auth rejected
+# but the port is alive) count: the basic-auth assertion below distinguishes them.
+# 502 (Caddy up but dsh not yet) and 000 (not listening) keep waiting.
+# This was learned with dsh 0.1.2-rc.1: its web auth can hang in 401, with Caddy fine
 READY=0
 LAST_CODE=000
 START_TS="$(date +%s)"
 for _ in $(seq 1 120); do
   CODE="$(curl -s -u admin:smoketest -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/" || true)"
   LAST_CODE="$CODE"
-  if [ "$CODE" = "200" ]; then READY=1; break; fi
+  if [ "$CODE" = "200" ] || [ "$CODE" = "401" ]; then READY=1; break; fi
   sleep 2
 done
 if [ "$READY" != 1 ]; then
   ELAPSED=$(( $(date +%s) - START_TS ))
-  echo "错误：服务 ${ELAPSED}s 内未就绪（最后一次 HTTP code=$LAST_CODE）" >&2
+  echo "错误：服务 ${ELAPSED}s 内 Caddy 仍未监听（最后一次 HTTP code=$LAST_CODE）" >&2
+  echo "  （注：502/000 表示 Caddy/dsh 还在初始化；持续 502 是上游启动慢/挂）" >&2
+  echo "  （注：401 表示 Caddy 活但 basic auth 拒绝——会进入下一步 basic auth 断言，不算此错）" >&2
   docker logs "$CID" 2>&1 | tail -30 >&2
   exit 1
 fi
 
 echo "==> basic auth：无凭据应 401"
 CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")"
-[ "$CODE" = "401" ] || { echo "错误：期望 401 实际 $CODE" >&2; exit 1; }
+[ "$CODE" = "401" ] || { echo "错误：期望 401 实际 $CODE（caddy 自身未在 3081 basic-auth 拒绝）" >&2; exit 1; }
 
 echo "==> basic auth：带凭据应 200"
 CODE="$(curl -s -u admin:smoketest -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")"
-[ "$CODE" = "200" ] || { echo "错误：期望 200 实际 $CODE" >&2; exit 1; }
+[ "$CODE" = "200" ] || {
+  echo "错误：带 admin:smoketest 凭据应返 200，实际 $CODE" >&2
+  # 关键诊断：绕过 caddy 直连容器内 dsh 3080，看 dsh 自身是 200/401/502/连不上——
+  # 区分「Caddy basic-auth 配置错（DSH_AUTH_HASH 注入问题）」vs「dsh 上游就拒绝」
+  #
+  # Key diagnostic: bypass Caddy and curl dsh 3080 directly to see whether dsh itself
+  # returns 200/401/502 or is unreachable — distinguishes a Caddy basic-auth config
+  # issue (DSH_AUTH_HASH not injected) from dsh upstream rejecting everything
+  echo "--- 诊断：绕开 caddy 直连容器内 dsh 3080 ---" >&2
+  echo "  带 admin:smoketest 凭据:" >&2
+  docker exec "$CID" curl -s -u admin:smoketest -o /dev/null -w '  HTTP %{http_code} 耗时 %{time_total}s\n' "http://127.0.0.1:3080/" >&2 || true
+  echo "  不带凭据（dsh 自身通常会返 401/403 或重定向到登录页）:" >&2
+  docker exec "$CID" curl -s -o /dev/null -w '  HTTP %{http_code} 耗时 %{time_total}s\n' "http://127.0.0.1:3080/" >&2 || true
+  echo "  supervisor 摘要:" >&2
+  docker exec "$CID" supervisorctl status 2>&1 | sed 's/^/    /' >&2 || true
+  echo "  最近 30 行容器日志:" >&2
+  docker logs "$CID" 2>&1 | tail -30 | sed 's/^/    /' >&2
+  exit 1
+}
 
 echo "==> 特权 API fence：伪造 Host 直连容器内 dsh 应 403（fence 拒绝未授权来源）"
 # 不经 Caddy 直连 127.0.0.1:3080，伪造浏览器 Host=evil.com——dsh 视其为非本机来源
