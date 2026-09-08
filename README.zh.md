@@ -15,6 +15,7 @@
 - 内置健康检查：`docker compose ps` 直接可见服务真实健康状态（抓 dsh 一次性 token 换 cookie 后探测 dsh 响应，`starting`/`healthy`/`unhealthy`）
 - 镜像版本可 pin：构建参数 `DSH_VERSION`
 - CI 自动构建并推送 `ghcr.io/xidong-ai/deepseek-harness-web-docker`（latest + 日期时间 - 哈希 tag）
+- 每个合并请求都会运行与发布前相同的构建 + 冒烟测试作为合并门禁（PR 不推送镜像）；仅 push master 或手动触发才发布
 - 定时任务每日检查 dsh 上游：有新版本自动提升 `DSH_VERSION`、构建并冒烟测试，通过则推送 master 并钩住触发 GHCR 发布，失败则创建 Issue（存在同版本未关闭 Issue 时不再自动重试，可手动触发强制重试）
 - GHCR 发布可手动触发（Actions 页「Run workflow」）或由上游升级自动钩住触发（`workflow_dispatch`）
 
@@ -29,7 +30,7 @@ cp .env.example .env    # 编辑 DEEPSEEK_API_KEY（DSH_AUTH_USER/PASSWORD 自 0
 docker compose up -d    # 拉取 latest 镜像并启动
 ```
 
-> ⚠️ **升级警告 — 升级到含 dsh 0.1.2-rc.1+ 鉴权迁移的版本时,必须先 `git pull` 同步 `docker-compose.yml` / `Caddyfile` / `entrypoint.sh` 内的 token 抓取后台任务,仅 `docker compose pull` 拉新 image 配旧 compose 文件会导致 healthcheck 永远 unhealthy 且 web 服务裸奔(无鉴权)。** 具体见 PR #7 的 commit message 与 DESIGN.md §10 的版本演进记录。
+> ⚠️ **升级警告 — 升级到含 dsh 0.1.2-rc.1+ 鉴权迁移的版本时，必须先 `git pull` 同步 `docker-compose.yml` / `Caddyfile` / `entrypoint.sh` 内的 token 抓取后台任务，仅 `docker compose pull` 拉新 image 配旧 compose 文件会导致 healthcheck 永远 unhealthy 且 web 服务裸奔 (无鉴权)。** 具体见 PR #7 的 commit message 与 DESIGN.md §10 的版本演进记录。
 
 ### 方式二：本地构建
 

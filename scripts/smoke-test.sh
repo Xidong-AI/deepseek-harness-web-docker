@@ -70,6 +70,17 @@ echo "==> 启动容器冒烟"
 SMOKE_PARENT="${RUNNER_TEMP:-${TMPDIR:-$HOME}}"
 mkdir -p "$SMOKE_PARENT"
 SMOKE_HOME="$(mktemp -d -p "$SMOKE_PARENT" smoke-XXXXXX)"
+# mktemp 默认 0700。容器首启会把 bind mount 根 chown 成 node(uid 1000)，但权限位不变：
+# runner（GitHub Actions 上是 uid 1001）便无法 traverse，即使 web-launch-url.txt 已生成
+# 也读不到（表现为 60s 超时 + `tail: Permission denied`）。放宽目录到 755 让 runner 能进入，
+# 文件本身仍是 0644（只读）。本地跑时 runner uid 恰好也是 1000，不触发，故 CI 才暴露。
+#
+# mktemp defaults to 0700. The container's first-run chowns the bind-mount root to
+# node (uid 1000) without changing mode bits, so the runner (uid 1001 on GitHub Actions)
+# cannot traverse it and cannot read web-launch-url.txt even once it exists (symptom:
+# 60 s timeout + `tail: Permission denied`). Loosen the directory to 755 so the runner
+# can enter; files stay 0644 (read-only). Local runs use uid 1000, so only CI exposes this.
+chmod 755 "$SMOKE_HOME"
 mkdir -p "$SMOKE_HOME/.x-cmd.root/bin"
 printf '#!/bin/sh\nexit 0\n' > "$SMOKE_HOME/.x-cmd.root/bin/x"
 docker run -d --name "$CID" \
@@ -154,6 +165,15 @@ case "$VERSION" in
     fi
     LAUNCH_URL="$(cat "$URL_FILE")"
     echo "    抓取到 dsh 启动 URL: $LAUNCH_URL"
+    # URL_FILE 记录的是容器内 loopback 地址（dsh 强制 loopback bind），宿主机不能直连：
+    # 必须把主机：端口改写到映射端口 $PORT，才能经 Caddy 走真实浏览器路径；token 原样保留。
+    #
+    # URL_FILE holds the container-internal loopback address (dsh hard-binds loopback);
+    # the host cannot reach it directly. Rewrite host:port to the mapped port $PORT so the
+    # request goes through Caddy like a real browser; keep the token value as-is.
+    TOKEN="$(printf '%s' "$LAUNCH_URL" | sed -n 's#.*[?&]token=\([^&]*\).*#\1#p')"
+    [ -n "$TOKEN" ] || { echo "错误：无法从 $LAUNCH_URL 解析 token" >&2; exit 1; }
+    LAUNCH_URL="http://127.0.0.1:${PORT}/?token=${TOKEN}"
     # 一次性 token 换持久 cookie：GET ?token=XXX → 303 + Set-Cookie
     # Exchange one-time token for persistent cookie: GET ?token=XXX → 303 + Set-Cookie
     SMOKE_COOKIE="$(mktemp -p "$SMOKE_PARENT" smoke-cookie-XXXXXX)"
@@ -169,18 +189,29 @@ case "$VERSION" in
       cat "$SMOKE_COOKIE" >&2 || true
       exit 1
     fi
+    # cookie 同时要供宿主机 curl 与容器内 docker exec curl 使用，而 cookie 文件是宿主
+    # 路径、容器内不存在；统一抽成 Cookie header 字符串，两边都可用（HttpOnly cookie
+    # 在 curl 的 cookie jar 里以 #HttpOnly_ 前缀记录，解析时需一并纳入）。
+    #
+    # The cookie must work for both the host curl and the in-container `docker exec curl`,
+    # but the cookie jar is a host path that doesn't exist inside the container. Extract a
+    # Cookie header string usable on both sides (HttpOnly cookies are stored with a
+    # #HttpOnly_ prefix in curl's jar, so include them when parsing).
+    COOKIE_HEADER="Cookie: $(awk 'NF && ($1 ~ /^#HttpOnly_/ || $0 !~ /^#/) {print $6"="$7}' "$SMOKE_COOKIE" | paste -sd'; ' -)"
     echo "==> 鉴权：带 cookie 应 200"
-    CODE="$(curl -sS -b "$SMOKE_COOKIE" -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")"
+    CODE="$(curl -sS -H "$COOKIE_HEADER" -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")"
     if [ "$CODE" != "200" ]; then
       echo "错误：带 cookie 应返 200，实际 $CODE" >&2
       echo "--- 诊断：直连容器内 dsh 3080（带 cookie）---" >&2
-      docker exec "$CID" curl -sS -b "$SMOKE_COOKIE" -o /dev/null -w '  HTTP %{http_code}\n' "http://127.0.0.1:3080/" >&2 || true
+      docker exec "$CID" curl -sS -H "$COOKIE_HEADER" -o /dev/null -w '  HTTP %{http_code}\n' "http://127.0.0.1:3080/" >&2 || true
       docker logs "$CID" 2>&1 | tail -20 | sed 's/^/    /' >&2
       exit 1
     fi
     echo "    鉴权通过（cookie 持久化到 $SMOKE_HOME/.dsh/.credentials.yaml）"
-    # 新版路径：API fence 步骤用 cookie
-    AUTH_FLAGS=(-b "$SMOKE_COOKIE")
+    # 新版路径：API fence 步骤用 cookie（header 字符串，host/容器通用）
+    #
+    # New auth path: the fence step uses the cookie (a header string, valid on host and in-container)
+    AUTH_FLAGS=(-H "$COOKIE_HEADER")
     ;;
 esac
 
