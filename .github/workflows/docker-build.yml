@@ -1,12 +1,17 @@
-# 自动构建并推送 GHCR：push master 或手动/workflow_dispatch 触发
+# 自动构建并推送 GHCR：push master、pull_request 或手动/workflow_dispatch 触发
 # 镜像 tag：latest + 日期时间 - 提交哈希（如 20260815T0054-a1b2c3d）
+# PR 只跑 verify（构建 + 冒烟），不推送镜像：fork PR 的 GITHUB_TOKEN 无 GHCR 写权限，
+# 且未合并的代码不应发布。verify 作为合并门禁，挡住不合规提交（需配合分支保护的必需检查）。
 # workflow_dispatch 提供两种钩入方式：
 #   - 手动：Actions 页面点「Run workflow」或 gh workflow run docker-build.yml
 #   - 被钩：upstream-check 自动升级推送后显式触发——bot 用 GITHUB_TOKEN 推送的提交不会触发
 #           push 事件（GitHub 递归保护），而 workflow_dispatch 是 GITHUB_TOKEN 的例外，总是创建 run
 #
-# Auto-build and push to GHCR: triggered on push to master or manual/API dispatch
+# Auto-build and push to GHCR: triggered on push to master, pull_request, or manual/API dispatch
 # Image tags: latest + datetime-commit-hash (e.g. 20260815T0054-a1b2c3d)
+# PRs run verify only (build + smoke) and never push images: a fork PR's GITHUB_TOKEN cannot
+# write GHCR, and unmerged code must not be published. verify acts as a merge gate against
+# non-compliant submissions (pair it with branch protection's required checks).
 # workflow_dispatch offers two hook-in paths:
 #   - Manual: click "Run workflow" in the Actions tab or gh workflow run docker-build.yml
 #   - Hooked: upstream-check dispatches explicitly after an auto-upgrade push—commits pushed by
@@ -17,18 +22,21 @@ name: build-push-ghcr
 on:
   push:
     branches: [master]
+  pull_request:
+    branches: [master]
   workflow_dispatch:
 
 env:
   IMAGE: ghcr.io/xidong-ai/deepseek-harness-web-docker
 
 jobs:
-  # 推送前冒烟：构建镜像并跑端到端检查（basic auth / 特权 API fence / 双进程 / trustedHosts 注入），失败则不推送
-  # 手动 push 的代码不再未经验证直接发布
+  # 推送前冒烟：构建镜像并跑端到端检查（鉴权 token/cookie 或 basic auth / 特权 API fence / 双进程 / trustedHosts 注入），失败则不推送
+  # push 与 PR 共用同一套检查：push 失败阻断发布，PR 失败阻断合并（需分支保护勾选该检查为必需）
   #
-  # Pre-push smoke test: build the image and run end-to-end checks (basic auth / privileged-API fence /
-  # both processes / trustedHosts injection); a failure blocks the push, so manually pushed code
-  # is no longer published unverified
+  # Pre-push smoke test: build the image and run end-to-end checks (token/cookie or basic auth /
+  # privileged-API fence / both processes / trustedHosts injection); a failure blocks the push.
+  # push and PR share the same checks: a push failure blocks release, a PR failure blocks merge
+  # (requires the check to be marked required in branch protection)
   verify:
     runs-on: ubuntu-latest
     permissions:
@@ -47,6 +55,12 @@ jobs:
 
   build:
     needs: verify
+    # PR 只做验证，不发布镜像（fork PR 的 GITHUB_TOKEN 无 packages:write，且未合并代码不应发布）；
+    # 仅 push master / 手动 dispatch 推送 GHCR
+    #
+    # PRs verify only and never publish images (a fork PR's GITHUB_TOKEN has no packages:write,
+    # and unmerged code must not be released); GHCR is pushed only on push to master / manual dispatch
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read

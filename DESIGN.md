@@ -72,7 +72,7 @@ DSH v0.1 无内置认证，且特权 API（`settings.*`/`credentials.*`，`PRIVI
 | 13 | 与现有部署关系 | 独立通用项目，推送给用户；本机测试用另一端口，不影响现有 pm2 部署 |
 | 14 | 分发 | 源码（Dockerfile + compose）+ CI 自动构建推 GHCR |
 | 15 | GHCR 路径 | `ghcr.io/xidong-ai/deepseek-harness-web-docker` |
-| 16 | CI 触发/tag | push master 触发；镜像 tag = 日期时间 + 提交哈希（另推 `latest` 便于 compose 默认引用） |
+| 16 | CI 触发/tag | push master、pull_request 触发；PR 仅跑 verify（不推镜像，作合并门禁）；镜像 tag = 日期时间 + 提交哈希（另推 `latest` 便于 compose 默认引用） |
 
 ## 4. 文件清单
 
@@ -143,7 +143,7 @@ deepseek-harness-web-docker/
     config:
       trustedHosts: []
   ```
-- **.github/workflows/docker-build.yml**：`on: push: branches: [master]`；buildx（`linux/amd64`，可选 `linux/arm64` 多架构）→ tag `latest` + `${日期时间}-${sha7}`（如 `20260815T0054-a1b2c3d`）→ push `ghcr.io/xidong-ai/deepseek-harness-web-docker`（用 `GITHUB_TOKEN`，组织级包权限需在仓库设置开启）
+- **.github/workflows/docker-build.yml**：`on: push: branches: [master]` + `pull_request: branches: [master]`；push/PR 均先跑 `verify`（构建 + 冒烟），PR 仅此一步、不推镜像；push 通过后 buildx（`linux/amd64`，可选 `linux/arm64` 多架构）→ tag `latest` + `${日期时间}-${sha7}`（如 `20260815T0054-a1b2c3d`）→ push `ghcr.io/xidong-ai/deepseek-harness-web-docker`（用 `GITHUB_TOKEN`，组织级包权限需在仓库设置开启）
 
 ## 5. 环境变量参考（.env.example）
 
