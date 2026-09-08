@@ -29,7 +29,7 @@ cp .env.example .env    # edit DEEPSEEK_API_KEY (DSH_AUTH_USER/PASSWORD are now 
 docker compose up -d    # pull the latest image and start
 ```
 
-> ⚠️ **升级警告 — 升级到含 dsh 0.1.2-rc.1+ 鉴权迁移的版本时,必须先 `git pull` 同步 `docker-compose.yml` / `Caddyfile` / `entrypoint.sh` / `entrypoint.sh 内的 token 抓取后台任务`,仅 `docker compose pull` 拉新 image 配旧 compose 文件会导致 healthcheck 永远 unhealthy 且 web 服务裸奔(无鉴权)。** 具体见 PR #7 的 commit message 与 DESIGN.md §10 的版本演进记录。
+> ⚠️ **升级警告 — 升级到含 dsh 0.1.2-rc.1+ 鉴权迁移的版本时，必须先 `git pull` 同步 `docker-compose.yml` / `Caddyfile` / `entrypoint.sh` / `entrypoint.sh 内的 token 抓取后台任务`,仅 `docker compose pull` 拉新 image 配旧 compose 文件会导致 healthcheck 永远 unhealthy 且 web 服务裸奔 (无鉴权)。** 具体见 PR #7 的 commit message 与 DESIGN.md §10 的版本演进记录。
 
 ### Option 2: Build locally
 
