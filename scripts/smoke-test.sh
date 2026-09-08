@@ -70,6 +70,17 @@ echo "==> 启动容器冒烟"
 SMOKE_PARENT="${RUNNER_TEMP:-${TMPDIR:-$HOME}}"
 mkdir -p "$SMOKE_PARENT"
 SMOKE_HOME="$(mktemp -d -p "$SMOKE_PARENT" smoke-XXXXXX)"
+# mktemp 默认 0700。容器首启会把 bind mount 根 chown 成 node(uid 1000)，但权限位不变：
+# runner（GitHub Actions 上是 uid 1001）便无法 traverse，即使 web-launch-url.txt 已生成
+# 也读不到（表现为 60s 超时 + `tail: Permission denied`）。放宽目录到 755 让 runner 能进入，
+# 文件本身仍是 0644（只读）。本地跑时 runner uid 恰好也是 1000，不触发，故 CI 才暴露。
+#
+# mktemp defaults to 0700. The container's first-run chowns the bind-mount root to
+# node (uid 1000) without changing mode bits, so the runner (uid 1001 on GitHub Actions)
+# cannot traverse it and cannot read web-launch-url.txt even once it exists (symptom:
+# 60 s timeout + `tail: Permission denied`). Loosen the directory to 755 so the runner
+# can enter; files stay 0644 (read-only). Local runs use uid 1000, so only CI exposes this.
+chmod 755 "$SMOKE_HOME"
 mkdir -p "$SMOKE_HOME/.x-cmd.root/bin"
 printf '#!/bin/sh\nexit 0\n' > "$SMOKE_HOME/.x-cmd.root/bin/x"
 docker run -d --name "$CID" \

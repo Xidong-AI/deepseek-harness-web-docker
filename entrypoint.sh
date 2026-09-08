@@ -199,7 +199,19 @@ fi
 # 0.1.1-rc.2 doesn't print this URL, so on older dsh the file stays empty — harmless.
 WEB_LOG="$DHS_HOME/web-server.log"
 WEB_URL_FILE="$DHS_HOME/web-launch-url.txt"
-touch "$WEB_LOG"  # 让 tail -F 立即可订阅（dsh 启动后追加）
+# 预创建必须让 node 可写：entrypoint 以 root 运行，裸 touch 会留下 root:root 0644，
+# supervisord 中 dsh 以 user=node 执行 `tee -a` 追加时 EACCES，启动日志（含 ?token= URL）
+# 永远写不进文件，后台 tail 也就抓不到 token。故创建后立即把属主交给 node。
+# 仅首启会触发：文件已存在且属主正确时 touch 不改属主，二次启动天然正常。
+#
+# Pre-creation must leave the file writable by node: the entrypoint runs as root, so a bare
+# touch leaves root:root 0644 and dsh's `tee -a` under user=node fails with EACCES — the
+# startup log (including the ?token= URL) never reaches the file, so the background tail
+# cannot extract the token. Hand ownership to node right after creation.
+# First run only: when the file already exists with the right owner, touch keeps it,
+# so subsequent starts are fine.
+touch "$WEB_LOG"
+chown node:node "$WEB_LOG"
 (
   # 在子 shell 中等 + 抓 + 写 + 退出；不影响 entrypoint 主体
   #
