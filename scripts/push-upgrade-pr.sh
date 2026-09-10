@@ -57,6 +57,16 @@ upsert_pr() { # <latest> <current>
   fi
 }
 
+# 提交者身份：prepare 的 merge 与 push 的 commit 都会创建提交，而 CI runner 无全局身份
+# （本地开发环境自带身份，CI 上 merge 曾因 empty ident 失败）
+#
+# Committer identity: prepare's merge and push's commit both create commits, and the CI runner has
+# no global identity (a CI run failed the merge with "empty ident" before this was added)
+ensure_identity() {
+  git config user.name "github-actions[bot]"
+  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+}
+
 prepare_branch() {
   # 始终基于 master 重建本地分支（工作树回到 master 最新内容），再以 --no-ff -s ours 合并远端分支历史：
   # 新提交以远端分支 HEAD 为祖先，push 必然 fast-forward；合并结果完全取 master 内容，
@@ -71,7 +81,14 @@ prepare_branch() {
   # (the ruleset forbids force pushes and branch deletion).
   # --no-ff is essential: when the remote branch descends from master (a retry after an unmerged push),
   # a plain merge would fast-forward the worktree back to the stale branch content and leave nothing to bump
-  git fetch origin "$BRANCH" >/dev/null 2>&1 || true
+  # 显式 refspec 抓取远端分支：不能依赖 remote.origin.fetch 的默认映射（浅克隆时它可能只映射
+  # master，裸分支名 fetch 仅更新 FETCH_HEAD，导致下方 refs/remotes 判断误判「分支不存在」）
+  #
+  # Fetch the remote branch with an explicit refspec: never rely on remote.origin.fetch's default
+  # mapping (a shallow clone may map only master; a bare branch-name fetch then updates only
+  # FETCH_HEAD, making the refs/remotes check below falsely see "branch missing")
+  git fetch origin "refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" >/dev/null 2>&1 || true
+  ensure_identity
   git checkout -B "$BRANCH" master
   if git rev-parse --verify -q "refs/remotes/origin/$BRANCH" >/dev/null; then
     # -s ours 策略：合并结果树完全取本地（master）内容，仅将远端分支历史并入祖先链，
@@ -90,8 +107,7 @@ prepare_branch() {
 
 push_branch() { # <latest> <current>
   local latest="$1" current="$2"
-  git config user.name "github-actions[bot]"
-  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+  ensure_identity
   git add Dockerfile docker-compose.yml README.md README.zh.md
   git commit -m "【维护，构建】升级 dsh 版本至 $latest"
   git push origin "$BRANCH"
