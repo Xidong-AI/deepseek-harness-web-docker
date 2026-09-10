@@ -23,7 +23,7 @@ CURRENT="$2"
 GH_BIN="${GH:-gh}"
 GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 export GH_TOKEN
-TITLE="[自动升级] dsh 上游 $LATEST 构建冒烟测试失败"
+TITLE="[自动升级] dsh 上游 $LATEST 升级流程失败"
 
 EXISTING="$("$GH_BIN" issue list --state open --search "in:title \"$TITLE\"" --json number -q '.[0].number' 2>/dev/null || true)"
 if [ -n "$EXISTING" ]; then
@@ -39,8 +39,8 @@ fi
 - 检测时间 (detected at): \`$(date -u +%FT%TZ)\`
 - 运行日志 (run log): ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
 
-升级脚本已将 \`DSH_VERSION\` 提升至 \`$LATEST\` 并执行构建与冒烟测试，但未通过，代码**未推送**至 master。
-The upgrade script bumped \`DSH_VERSION\` to \`$LATEST\` and ran build & smoke tests, but they failed; the change was **not** pushed to master.
+升级脚本已将 \`DSH_VERSION\` 提升至 \`$LATEST\` 并执行构建与冒烟测试，但升级流程（冒烟测试或 PR 推送）未通过，代码**未进入** master。
+The upgrade script bumped \`DSH_VERSION\` to \`$LATEST\` and ran build & smoke tests, but the upgrade flow (smoke test or PR push) failed; the change did **not** reach master.
 
 请人工排查：上游版本是否可安装、容器是否可正常启动，修复后手动升级或等待下次定时检查。
 Please investigate: whether the upstream version installs and the container starts; fix it, then upgrade manually or wait for the next scheduled check.

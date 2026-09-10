@@ -1,13 +1,17 @@
-# 定时检查 dsh 上游版本：有新版本 → 提升版本号 → 构建冒烟测试 → 通过则推送 master，失败则创建 Issue
-# 推送后显式触发 docker-build.yml 发布 GHCR 镜像，形成「升级 → 发布」闭环
-# 注意：bot 用 GITHUB_TOKEN 推送的提交不会触发 docker-build.yml 的 push 事件（GitHub 递归保护），
-#       因此发布必须通过 workflow_dispatch API 显式钩住（该事件是 GITHUB_TOKEN 的例外，总是创建 run）
+# 定时检查 dsh 上游版本：有新版本 → 提升版本号 → 构建冒烟测试 → 通过则推送常驻 PR 分支
+# auto-upgrade/dsh 并创建/更新唯一 PR（成员批准合并），失败则创建 Issue
+# 成员合并 PR 产生的 push 事件会自动触发 docker-build.yml 发布 GHCR 镜像，形成「升级 → 批准 → 发布」闭环
+# 注意：bot 用 GITHUB_TOKEN 创建的 PR 不会触发 docker-build.yml 的 pull_request 事件（GitHub 递归保护），
+#       属预期行为——冒烟测试已在升级流程内完成；成员合并的 push 会正常触发 CI
 #
-# Scheduled dsh upstream check: bump version on update → build & smoke test → push master on success, open an Issue on failure
-# After pushing, explicitly dispatch docker-build.yml to publish GHCR images — an "upgrade → release" loop
-# Note: commits pushed by the bot's GITHUB_TOKEN do NOT fire docker-build.yml's push event (GitHub
-#       recursion protection), so the release must be hooked explicitly via the workflow_dispatch
-#       API (the GITHUB_TOKEN exception that always creates a run)
+# Scheduled dsh upstream check: bump version on update → build & smoke test → push the standing PR
+# branch auto-upgrade/dsh and create/update the single PR (merged by a member approver), open an
+# Issue on failure
+# A member's merge push fires docker-build.yml automatically to publish GHCR images — an
+# "upgrade → approval → release" loop
+# Note: a PR created by the bot's GITHUB_TOKEN does NOT fire docker-build.yml's pull_request event
+#       (GitHub recursion protection); this is expected — the smoke test already ran inside the
+#       upgrade flow. A member's merge push triggers CI normally
 name: check-dsh-upstream
 
 on:
@@ -31,11 +35,13 @@ jobs:
     permissions:
       contents: read
       issues: read
+      pull-requests: read
     outputs:
       current: ${{ steps.check.outputs.current }}
       latest: ${{ steps.check.outputs.latest }}
       should_upgrade: ${{ steps.check.outputs.should_upgrade }}
       blocked: ${{ steps.gate.outputs.blocked }}
+      blocked_pr: ${{ steps.gate-pr.outputs.blocked_pr }}
     steps:
       - uses: actions/checkout@v4
 
@@ -68,23 +74,58 @@ jobs:
         env:
           LATEST: ${{ steps.check.outputs.latest }}
 
+      # 门闩：auto-upgrade/dsh 分支上已有同版本 open PR 时跳过（避免每日重复推送同版本提交）
+      # 仅定时触发生效；手动触发（workflow_dispatch）绕过，用于人工强制刷新 PR
+      #
+      # Gate: skip when an open PR for this version already exists on auto-upgrade/dsh
+      # (avoid re-pushing the same version every day); manual dispatch bypasses it to force-refresh the PR
+      - name: 门闩检查：自动升级 PR
+        id: gate-pr
+        if: steps.check.outputs.should_upgrade == 'true' && github.event_name == 'schedule'
+        run: |
+          BLOCKED="$(scripts/check-pr-gate.sh "$LATEST")"
+          if [ "$BLOCKED" = "1" ]; then
+            BOOL=true
+            echo "auto-upgrade/dsh 已有 $LATEST 的 open PR，跳过本次自动升级（可手动触发强制刷新）"
+          else
+            BOOL=false
+          fi
+          # 布尔字符串输出：upgrade job 的 if 按 'true'/'false' 比较（与 issue 门闩同约定）
+          #
+          # Boolean string output: the upgrade job's if compares against 'true'/'false'
+          # (same convention as the Issue gate)
+          echo "blocked_pr=$BOOL" >> "$GITHUB_OUTPUT"
+        env:
+          LATEST: ${{ steps.check.outputs.latest }}
+
       - name: 打印检查结果
         run: |
           echo "当前版本 (current): ${{ steps.check.outputs.current }}"
           echo "上游最新 (latest):  ${{ steps.check.outputs.latest }}"
           echo "需要升级 (upgrade): ${{ steps.check.outputs.should_upgrade }}"
-          echo "被门闩拦截 (blocked): ${{ steps.gate.outputs.blocked }}"
+          echo "被 Issue 门闩拦截 (blocked): ${{ steps.gate.outputs.blocked }}"
+          echo "被 PR 门闩拦截 (blocked_pr): ${{ steps.gate-pr.outputs.blocked_pr }}"
 
   upgrade:
     needs: check
-    if: needs.check.outputs.should_upgrade == 'true' && needs.check.outputs.blocked != 'true'
+    if: needs.check.outputs.should_upgrade == 'true' && needs.check.outputs.blocked != 'true' && needs.check.outputs.blocked_pr != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
       issues: write
-      actions: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
+
+      # 在版本提升前准备 PR 分支：分支不存在则从 master 新建；存在则合并 master 最新内容，
+      # 保证后续 push 为 fast-forward（ruleset 禁 force push；若先 bump 再切分支，bump 结果会被覆盖）
+      #
+      # Prep the PR branch BEFORE the version bump: create it from master, or merge master's latest,
+      # so the later push is fast-forward (the ruleset forbids force pushes; switching branches after
+      # the bump would clobber it)
+      - name: 准备 PR 分支
+        run: |
+          scripts/push-upgrade-pr.sh prepare
 
       - name: 提升版本号（Dockerfile / compose / README 双语）
         run: |
@@ -99,34 +140,28 @@ jobs:
         env:
           LATEST: ${{ needs.check.outputs.latest }}
 
-      - name: 推送升级至 master
+      # 提交升级、推送常驻 PR 分支并创建/更新唯一 PR（成员批准合并后，
+      # 合并 push 自动触发 docker-build.yml 发布 GHCR，无需显式 dispatch）
+      #
+      # Commit the upgrade, push the standing PR branch, and create/update the single PR
+      # (after a member approves and merges, the merge push fires docker-build.yml automatically;
+      # no explicit dispatch is needed)
+      - name: 推送升级分支并创建/更新 PR
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Dockerfile docker-compose.yml README.md README.zh.md
-          git commit -m "【维护，构建】升级 dsh 版本至 $LATEST"
-          git push origin master
+          scripts/push-upgrade-pr.sh push "$LATEST" "$CURRENT"
         env:
           LATEST: ${{ needs.check.outputs.latest }}
-
-      # 钩住 GHCR 发布（见文件头注释）。continue-on-error：升级推送已成功，触发失败不应把 job
-      # 标记失败——否则 failure() 会误建「构建冒烟测试失败」Issue；触发失败可在日志中排查或手动触发
-      #
-      # Hook the GHCR release (see the file header). continue-on-error: the upgrade push already
-      # succeeded, so a dispatch failure must not fail the job—otherwise failure() would falsely
-      # open a "smoke test failed" Issue; a failed dispatch can be investigated in the log or
-      # triggered manually
-      - name: 触发 GHCR 发布（docker-build.yml）
-        continue-on-error: true
-        run: |
-          gh workflow run docker-build.yml --ref master
-        env:
+          CURRENT: ${{ needs.check.outputs.current }}
+          # GH_TOKEN 显式透传：gh pr 需要凭据（脚本内亦有 GITHUB_TOKEN 兜底，这是双层防御）
+          #
+          # Pass GH_TOKEN explicitly: gh pr needs credentials (the script also falls back to
+          # GITHUB_TOKEN, so this is belt-and-suspenders)
           GH_TOKEN: ${{ github.token }}
 
-      # 升级已成功：旧版本的失败 Issue 均已过时，关闭以免陈旧累积
+      # 升级已提交为 PR：旧版本的失败 Issue 均已过时，关闭以免陈旧累积
       # continue-on-error：清理失败不影响升级结果（不触发下方 failure() 步骤）
       #
-      # The upgrade succeeded: failure Issues for older versions are stale; close them to avoid accumulation
+      # The upgrade is now a PR: failure Issues for older versions are stale; close them to avoid accumulation
       # continue-on-error: cleanup failure must not fail the upgrade (must not trigger the failure() step below)
       - name: 关闭过时的失败 Issue
         continue-on-error: true
@@ -142,10 +177,8 @@ jobs:
         env:
           LATEST: ${{ needs.check.outputs.latest }}
           CURRENT: ${{ needs.check.outputs.current }}
-          # GH_TOKEN 显式透传：与「触发 GHCR 发布」对齐，避免 gh 因无凭据报错
-          # (open-issue.sh 内部亦有 GITHUB_TOKEN 兜底，这是双层防御)
+          # GH_TOKEN 显式透传：避免 gh 因无凭据报错（open-issue.sh 内部亦有 GITHUB_TOKEN 兜底，这是双层防御）
           #
-          # Pass GH_TOKEN explicitly: matches the "Hook GHCR release" step; prevents gh from
-          # failing for lack of credentials. open-issue.sh also falls back to GITHUB_TOKEN,
-          # so this is belt-and-suspenders
+          # Pass GH_TOKEN explicitly: prevents gh from failing for lack of credentials.
+          # open-issue.sh also falls back to GITHUB_TOKEN, so this is belt-and-suspenders
           GH_TOKEN: ${{ github.token }}

@@ -4,8 +4,8 @@
 # 且未合并的代码不应发布。verify 作为合并门禁，挡住不合规提交（需配合分支保护的必需检查）。
 # workflow_dispatch 提供两种钩入方式：
 #   - 手动：Actions 页面点「Run workflow」或 gh workflow run docker-build.yml
-#   - 被钩：upstream-check 自动升级推送后显式触发——bot 用 GITHUB_TOKEN 推送的提交不会触发
-#           push 事件（GitHub 递归保护），而 workflow_dispatch 是 GITHUB_TOKEN 的例外，总是创建 run
+#   - 被钩：upstream-check 现将升级推送到 PR 分支 auto-upgrade/dsh；PR 由成员批准合并后，
+#           合并产生的 push 事件直接触发本工作流（成员合并的 push 会正常触发 CI）
 #
 # Auto-build and push to GHCR: triggered on push to master, pull_request, or manual/API dispatch
 # Image tags: latest + datetime-commit-hash (e.g. 20260815T0054-a1b2c3d)
@@ -14,9 +14,9 @@
 # non-compliant submissions (pair it with branch protection's required checks).
 # workflow_dispatch offers two hook-in paths:
 #   - Manual: click "Run workflow" in the Actions tab or gh workflow run docker-build.yml
-#   - Hooked: upstream-check dispatches explicitly after an auto-upgrade push—commits pushed by
-#             the bot's GITHUB_TOKEN do not fire the push event (GitHub recursion protection),
-#             while workflow_dispatch is the GITHUB_TOKEN exception and always creates a run
+#   - Hooked: upstream-check now pushes upgrades to the PR branch auto-upgrade/dsh; once a member
+#             approves and merges the PR, the merge push fires this workflow directly (a member's
+#             merge push triggers CI normally)
 name: build-push-ghcr
 
 on:
