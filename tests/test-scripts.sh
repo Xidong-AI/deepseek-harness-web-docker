@@ -212,6 +212,14 @@ GUARD_LOG="$TMP/mock_guard_gate.log" MOCK_LOG="$TMP/mock_guard_gate_gh.log" MOCK
   "$GATE" 0.2.0 > "$TMP/gate_guard.out" 2>&1
 assert_grep "gate：GITHUB_TOKEN 兜底为 GH_TOKEN" "GH_TOKEN=ghp_ci_fallback" "$TMP/mock_guard_gate.log"
 
+# 版本边界：0.2.0 不得匹配 0.2.0-rc.1（与 check-pr-gate.sh 同思想）
+#
+# Version boundary: 0.2.0 must not match 0.2.0-rc.1 (same idea as check-pr-gate.sh)
+GATE_RC='[{"title":"[自动升级] dsh 上游 0.2.0-rc.1 升级流程失败","number":13}]'
+MOCK_LOG="$TMP/mock9.log" MOCK_LIST_OUT="$GATE_RC" GH="$MOCK_GH" \
+  "$GATE" 0.2.0 > "$TMP/gate5.out" 2>&1
+assert_eq "版本前缀不误拦（0.2.0 vs 0.2.0-rc.1）" 0 "$(cat "$TMP/gate5.out")"
+
 echo "== close-stale-issues.sh (mock gh)=="
 CLOSE="$ROOT/scripts/close-stale-issues.sh"
 CLOSE_LIST='[{"title":"[自动升级] dsh 上游 0.1.9 构建冒烟测试失败","number":9},{"title":"[自动升级] dsh 上游 0.2.0 构建冒烟测试失败","number":7}]'
