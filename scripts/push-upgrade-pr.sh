@@ -58,24 +58,33 @@ upsert_pr() { # <latest> <current>
 }
 
 prepare_branch() {
-  # 分支不存在 → 从 master 新建；存在 → 合并 master 最新内容：
-  # 工作树回到 master 状态（-X theirs），并产生以远端分支 HEAD 为祖先的合并提交，
-  # 使后续 push 必然 fast-forward（ruleset 禁 force push 与删除分支）
+  # 始终基于 master 重建本地分支（工作树回到 master 最新内容），再以 --no-ff -s ours 合并远端分支历史：
+  # 新提交以远端分支 HEAD 为祖先，push 必然 fast-forward；合并结果完全取 master 内容，
+  # 保证 bump 永远基于 master 而非旧分支残留（ruleset 禁 force push 与删除分支）。
+  # --no-ff 不可省：远端分支是 master 后代时（上次推送未合并的重试场景），普通 merge 会 fast-forward
+  # 使工作树变成旧分支内容，bump 将无事可做
   #
-  # No branch → create from master; exists → merge master's latest:
-  # the worktree returns to master's state (-X theirs) and the merge commit descends from the
-  # remote branch HEAD, so the later push is guaranteed fast-forward
-  # (the ruleset forbids force pushes and branch deletion)
+  # Rebuild the local branch on master (worktree returns to master's latest), then merge the remote
+  # branch history with --no-ff -s ours: the new commit descends from the remote branch HEAD, so the
+  # push is guaranteed fast-forward; the merge result is exactly master's content, so the bump
+  # always starts from master, never from stale branch leftovers
+  # (the ruleset forbids force pushes and branch deletion).
+  # --no-ff is essential: when the remote branch descends from master (a retry after an unmerged push),
+  # a plain merge would fast-forward the worktree back to the stale branch content and leave nothing to bump
   git fetch origin "$BRANCH" >/dev/null 2>&1 || true
+  git checkout -B "$BRANCH" master
   if git rev-parse --verify -q "refs/remotes/origin/$BRANCH" >/dev/null; then
-    git checkout -B "$BRANCH" "origin/$BRANCH"
-    # -X theirs 仅能解决文本冲突；结构性冲突（如文件删除）会中止合并，由 set -e 转为失败 Issue 人工介入
+    # -s ours 策略：合并结果树完全取本地（master）内容，仅将远端分支历史并入祖先链，
+    # 保证新提交可 fast-forward 推送。与 -X ours（仅解决文本冲突）不同，-s ours 彻底无视
+    # 分支内容且永不因冲突中止——旧分支上的内容一律以 master 为准，丢弃也无妨
+    # （分支只含自动升级内容，最终以 master + 新 bump 为准）
     #
-    # -X theirs only resolves textual conflicts; structural ones (e.g. file deletion) abort the
-    # merge and fail the job via set -e, surfacing as a failure Issue for human intervention
-    git merge --no-edit -X theirs master
-  else
-    git checkout -B "$BRANCH" master
+    # -s ours strategy: the merge result tree is exactly the local (master) content; the remote
+    # branch history is only grafted into the ancestry so the new commit can be pushed fast-forward.
+    # Unlike -X ours (which only resolves textual conflicts), -s ours ignores the branch content
+    # entirely and never aborts on conflicts — anything stale on the branch is safely discarded
+    # (the branch only carries auto-upgrade content; master plus the new bump is authoritative)
+    git merge --no-ff --no-edit -s ours "origin/$BRANCH"
   fi
 }
 
