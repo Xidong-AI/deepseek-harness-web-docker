@@ -115,7 +115,15 @@ jobs:
       issues: write
       pull-requests: write
     steps:
+      # fetch-depth: 0（完整历史）：prepare 需合并远端 PR 分支，浅克隆（默认 depth=1）缺少共同祖先，
+      # merge 会报 "refusing to merge unrelated histories"
+      #
+      # fetch-depth: 0 (full history): prepare merges the remote PR branch and needs the common
+      # ancestor; a shallow clone (default depth=1) fails the merge with
+      # "refusing to merge unrelated histories"
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # 在版本提升前准备 PR 分支：分支不存在则从 master 新建；存在则合并 master 最新内容，
       # 保证后续 push 为 fast-forward（ruleset 禁 force push；若先 bump 再切分支，bump 结果会被覆盖）
