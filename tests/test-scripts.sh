@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# 单测：should-upgrade.sh（版本比较）与 upgrade-dsh.sh（文件更新）
+# 单测：should-upgrade.sh（版本比较）、upgrade-dsh.sh（文件更新）、open-issue.sh（失败 Issue）、
+# check-issue-gate.sh（失败 Issue 门闩）、close-stale-issues.sh（过时 Issue 清理）、
+# check-pr-gate.sh（自动升级 PR 门闩）与 push-upgrade-pr.sh 的 upsert_pr（PR 创建/更新）
+# git 分支准备与推送部分难 mock，由 CI 真机验证
 #
-# Unit tests: should-upgrade.sh (version comparison) and upgrade-dsh.sh (file updates)
+# Unit tests: should-upgrade.sh (version comparison), upgrade-dsh.sh (file updates), open-issue.sh
+# (failure Issue), check-issue-gate.sh (failure Issue gate), close-stale-issues.sh (stale Issue cleanup),
+# check-pr-gate.sh (auto-upgrade PR gate), and push-upgrade-pr.sh's upsert_pr (PR create/update)
+# The git branch prep and push parts are hard to mock and are verified live on CI
 # Usage: tests/test-scripts.sh
 set -euo pipefail
 
@@ -128,6 +134,10 @@ case "$1 $2" in
     ;;
   "issue create") echo "created" ;;
   "issue close") echo "closed $3" ;;
+  "pr list") echo "${MOCK_LIST_OUT-}" ;;
+  "pr view") echo "${MOCK_PR_STATE-}" ;;
+  "pr create") echo "created" ;;
+  "pr edit") echo "edited" ;;
 esac
 MOCK
 chmod +x "$MOCK_GH"
@@ -137,6 +147,7 @@ MOCK_LOG="$TMP/mock1.log" MOCK_LIST_OUT='[]' GH="$MOCK_GH" \
   "$OPEN_ISSUE" 0.2.0 0.1.0-rc.6 > "$TMP/issue1.out" 2>&1
 assert_grep "无已有 Issue 时创建"            "已创建 Issue" "$TMP/issue1.out"
 assert_grep "create 调用含新版本标题"         "issue create --title \[自动升级\] dsh 上游 0.2.0" "$TMP/mock1.log"
+assert_grep "create 标题为通用失败措辞"       "升级流程失败" "$TMP/mock1.log"
 assert_grep "create 调用含上游版本正文"        "0.2.0" "$TMP/mock1.log"
 
 MOCK_LOG="$TMP/mock2.log" MOCK_LIST_OUT='[{"number":7}]' GH="$MOCK_GH" \
@@ -206,6 +217,64 @@ MOCK_LOG="$TMP/mock8.log" MOCK_LIST_OUT='[]' GH="$MOCK_GH" \
   "$CLOSE" > "$TMP/close2.out" 2>&1
 assert_grep "无 Issue 时提示" "无过时的失败 Issue" "$TMP/close2.out"
 assert_no_grep "无 Issue 时不调用 close" "issue close" "$TMP/mock8.log"
+
+echo "== check-pr-gate.sh (mock gh)=="
+PRGATE="$ROOT/scripts/check-pr-gate.sh"
+PRGATE_LIST='[{"title":"【维护，构建】升级 dsh 版本至 0.2.0","number":11}]'
+
+MOCK_LOG="$TMP/prgate1.log" MOCK_LIST_OUT="$PRGATE_LIST" GH="$MOCK_GH" \
+  "$PRGATE" 0.2.0 > "$TMP/prgate1.out" 2>&1
+assert_eq "同版本 open PR 存在时拦截" 1 "$(cat "$TMP/prgate1.out")"
+
+MOCK_LOG="$TMP/prgate2.log" MOCK_LIST_OUT="$PRGATE_LIST" GH="$MOCK_GH" \
+  "$PRGATE" 0.2.1 > "$TMP/prgate2.out" 2>&1
+assert_eq "不同版本 PR 不拦截" 0 "$(cat "$TMP/prgate2.out")"
+
+# 版本前缀边界：0.2.0 不得匹配标题中的 0.2.0-rc.1（与 upgrade-dsh.sh 的边界替换同思想）
+#
+# Version-prefix boundary: 0.2.0 must not match 0.2.0-rc.1 in a title
+# (same idea as upgrade-dsh.sh's boundary replacement)
+PRGATE_RC='[{"title":"【维护，构建】升级 dsh 版本至 0.2.0-rc.1","number":12}]'
+MOCK_LOG="$TMP/prgate3.log" MOCK_LIST_OUT="$PRGATE_RC" GH="$MOCK_GH" \
+  "$PRGATE" 0.2.0 > "$TMP/prgate3.out" 2>&1
+assert_eq "版本前缀不误拦（0.2.0 vs 0.2.0-rc.1）" 0 "$(cat "$TMP/prgate3.out")"
+
+MOCK_LOG="$TMP/prgate4.log" MOCK_LIST_OUT='[]' GH="$MOCK_GH" \
+  "$PRGATE" 0.2.0 > "$TMP/prgate4.out" 2>&1
+assert_eq "无 PR 不拦截" 0 "$(cat "$TMP/prgate4.out")"
+
+MOCK_LOG="$TMP/prgate5.log" MOCK_LIST_OUT='' GH="$MOCK_GH" \
+  "$PRGATE" 0.2.0 > "$TMP/prgate5.out" 2>&1
+assert_eq "gh 查询失败（空输出）不拦截" 0 "$(cat "$TMP/prgate5.out")"
+
+echo "== push-upgrade-pr.sh upsert_pr (mock gh)=="
+# source 载入函数（脚本入口有 BASH_SOURCE 守卫，不执行 main）；
+# 需先设置 GH 再 source，使脚本顶部 GH_BIN 指向 mock
+#
+# Source to load the function (the script has a BASH_SOURCE guard and won't run main);
+# set GH before sourcing so the script's top-level GH_BIN points at the mock
+PRPUSH="$ROOT/scripts/push-upgrade-pr.sh"
+# shellcheck disable=SC1090
+GH="$MOCK_GH" source "$PRPUSH"
+
+MOCK_LOG="$TMP/prpush1.log" MOCK_PR_STATE=OPEN GH="$MOCK_GH" \
+  upsert_pr 0.2.0 0.1.0-rc.6 > "$TMP/prpush1.out" 2>&1
+assert_grep "PR 为 OPEN 时调用 edit" "pr edit auto-upgrade/dsh" "$TMP/prpush1.log"
+assert_grep "edit 标题含新版本" "升级 dsh 版本至 0.2.0" "$TMP/prpush1.log"
+
+MOCK_LOG="$TMP/prpush2.log" MOCK_PR_STATE='' GH="$MOCK_GH" \
+  upsert_pr 0.2.0 0.1.0-rc.6 > "$TMP/prpush2.out" 2>&1
+assert_grep "无 PR 时调用 create" "pr create" "$TMP/prpush2.log"
+assert_grep "create head 为常驻分支" "auto-upgrade/dsh" "$TMP/prpush2.log"
+assert_grep "create body 含上游版本" "0.2.0" "$TMP/prpush2.log"
+
+MOCK_LOG="$TMP/prpush3.log" MOCK_PR_STATE=MERGED GH="$MOCK_GH" \
+  upsert_pr 0.2.0 0.1.0-rc.6 > "$TMP/prpush3.out" 2>&1
+assert_grep "PR 已合并时重新 create" "pr create" "$TMP/prpush3.log"
+
+MOCK_LOG="$TMP/prpush4.log" MOCK_PR_STATE=CLOSED GH="$MOCK_GH" \
+  upsert_pr 0.2.0 0.1.0-rc.6 > "$TMP/prpush4.out" 2>&1
+assert_grep "PR 已关闭时重新 create" "pr create" "$TMP/prpush4.log"
 
 echo
 echo "结果：$PASS 通过，$FAIL 失败"
