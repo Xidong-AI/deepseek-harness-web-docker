@@ -73,6 +73,11 @@ jobs:
           echo "blocked=$BOOL" >> "$GITHUB_OUTPUT"
         env:
           LATEST: ${{ steps.check.outputs.latest }}
+          # GH_TOKEN 显式透传：gh 在 Actions 中需要凭据（脚本内亦有 GITHUB_TOKEN 兜底，双层防御）
+          #
+          # Pass GH_TOKEN explicitly: gh needs credentials in Actions
+          # (the script also falls back to GITHUB_TOKEN, belt-and-suspenders)
+          GH_TOKEN: ${{ github.token }}
 
       # 门闩：auto-upgrade/dsh 分支上已有同版本 open PR 时跳过（避免每日重复推送同版本提交）
       # 仅定时触发生效；手动触发（workflow_dispatch）绕过，用于人工强制刷新 PR
@@ -97,6 +102,11 @@ jobs:
           echo "blocked_pr=$BOOL" >> "$GITHUB_OUTPUT"
         env:
           LATEST: ${{ steps.check.outputs.latest }}
+          # GH_TOKEN 显式透传：gh 在 Actions 中需要凭据（脚本内亦有 GITHUB_TOKEN 兜底，双层防御）
+          #
+          # Pass GH_TOKEN explicitly: gh needs credentials in Actions
+          # (the script also falls back to GITHUB_TOKEN, belt-and-suspenders)
+          GH_TOKEN: ${{ github.token }}
 
       - name: 打印检查结果
         run: |
@@ -177,6 +187,11 @@ jobs:
           scripts/close-stale-issues.sh
         env:
           LATEST: ${{ needs.check.outputs.latest }}
+          # GH_TOKEN 显式透传：gh 在 Actions 中需要凭据（脚本内亦有 GITHUB_TOKEN 兜底，双层防御）
+          #
+          # Pass GH_TOKEN explicitly: gh needs credentials in Actions
+          # (the script also falls back to GITHUB_TOKEN, belt-and-suspenders)
+          GH_TOKEN: ${{ github.token }}
 
       - name: 失败时创建 Issue（同版本去重）
         if: failure()
