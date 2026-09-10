@@ -14,6 +14,17 @@ set -euo pipefail
 VERSION="$1"
 GH_BIN="${GH:-gh}"
 
+# GitHub Actions 兜底：CI 中 gh 必须有 GH_TOKEN，否则 exit 4；脚本内回退 GITHUB_TOKEN，
+# 调用方显式传入的 GH_TOKEN 仍优先（与 open-issue.sh / push-upgrade-pr.sh 同一双层防御）
+# 回归背景：本步骤曾漏配 env 且脚本无兜底，gh 报错被 2>/dev/null 吞掉 → 门闩静默恒不拦截
+#
+# GitHub Actions fallback: gh needs GH_TOKEN in CI or exits 4; fall back to GITHUB_TOKEN here.
+# An explicit GH_TOKEN still wins (same belt-and-suspenders as open-issue.sh / push-upgrade-pr.sh).
+# Regression: this step once lacked env and fallback, so gh's error was swallowed by 2>/dev/null
+# and the gate silently never blocked
+GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+export GH_TOKEN
+
 # 列出未关闭的自动升级失败 Issue，标题含目标版本即命中
 # simp: gh 仅输出 JSON，匹配交给 jq（mock 易仿真）；查询上限 50 条，按版本去重后远不会触及
 #

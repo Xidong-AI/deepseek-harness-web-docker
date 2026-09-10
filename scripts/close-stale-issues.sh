@@ -11,6 +11,17 @@ set -euo pipefail
 
 GH_BIN="${GH:-gh}"
 
+# GitHub Actions 兜底：CI 中 gh 必须有 GH_TOKEN，否则 exit 4；脚本内回退 GITHUB_TOKEN，
+# 调用方显式传入的 GH_TOKEN 仍优先（与 open-issue.sh / push-upgrade-pr.sh 同一双层防御）
+# 回归背景：本步骤曾漏配 env 且脚本无兜底，gh 报错被 2>/dev/null 吞掉 → 静默「无过时的失败 Issue」
+#
+# GitHub Actions fallback: gh needs GH_TOKEN in CI or exits 4; fall back to GITHUB_TOKEN here.
+# An explicit GH_TOKEN still wins (same belt-and-suspenders as open-issue.sh / push-upgrade-pr.sh).
+# Regression: this step once lacked env and fallback, so gh's error was swallowed by 2>/dev/null
+# and stale Issues were silently never closed
+GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+export GH_TOKEN
+
 JSON="$("$GH_BIN" issue list --state open --search 'in:title "[自动升级]"' --json title,number --limit 50 2>/dev/null || true)"
 [ -n "$JSON" ] || { echo "无过时的失败 Issue"; exit 0; }
 

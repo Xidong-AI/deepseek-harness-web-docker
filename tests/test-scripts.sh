@@ -202,6 +202,16 @@ MOCK_LOG="$TMP/mock6.log" MOCK_LIST_OUT='' GH="$MOCK_GH" \
   "$GATE" 0.2.0 > "$TMP/gate4.out" 2>&1
 assert_eq "gh 查询失败（空输出）不拦截" 0 "$(cat "$TMP/gate4.out")"
 
+# GitHub Actions 兜底：仅设 GITHUB_TOKEN 时应映射为 GH_TOKEN（回归：CI 步骤曾漏配 env 且脚本无兜底，
+# gh exit 4 被 2>/dev/null 吞掉 → 门闩静默恒不拦截）
+#
+# GitHub Actions fallback: GITHUB_TOKEN must be surfaced as GH_TOKEN (regression: the CI step
+# lacked env and the script had no fallback, so gh exit 4 was swallowed and the gate never blocked)
+GUARD_LOG="$TMP/mock_guard_gate.log" MOCK_LOG="$TMP/mock_guard_gate_gh.log" MOCK_LIST_OUT='[]' \
+  GH="$GH_TOKEN_GUARD" GH_REAL="$MOCK_GH" GITHUB_TOKEN=ghp_ci_fallback \
+  "$GATE" 0.2.0 > "$TMP/gate_guard.out" 2>&1
+assert_grep "gate：GITHUB_TOKEN 兜底为 GH_TOKEN" "GH_TOKEN=ghp_ci_fallback" "$TMP/mock_guard_gate.log"
+
 echo "== close-stale-issues.sh (mock gh)=="
 CLOSE="$ROOT/scripts/close-stale-issues.sh"
 CLOSE_LIST='[{"title":"[自动升级] dsh 上游 0.1.9 构建冒烟测试失败","number":9},{"title":"[自动升级] dsh 上游 0.2.0 构建冒烟测试失败","number":7}]'
@@ -217,6 +227,16 @@ MOCK_LOG="$TMP/mock8.log" MOCK_LIST_OUT='[]' GH="$MOCK_GH" \
   "$CLOSE" > "$TMP/close2.out" 2>&1
 assert_grep "无 Issue 时提示" "无过时的失败 Issue" "$TMP/close2.out"
 assert_no_grep "无 Issue 时不调用 close" "issue close" "$TMP/mock8.log"
+
+# GitHub Actions 兜底：仅设 GITHUB_TOKEN 时应映射为 GH_TOKEN（回归：CI 步骤曾漏配 env 且脚本无兜底，
+# gh exit 4 被 2>/dev/null 吞掉 → 静默「无过时的失败 Issue」，Issue 永不关闭）
+#
+# GitHub Actions fallback: GITHUB_TOKEN must be surfaced as GH_TOKEN (regression: the CI step
+# lacked env and the script had no fallback, so gh exit 4 was swallowed and stale Issues were never closed)
+GUARD_LOG="$TMP/mock_guard_close.log" MOCK_LOG="$TMP/mock_guard_close_gh.log" MOCK_LIST_OUT='[]' \
+  GH="$GH_TOKEN_GUARD" GH_REAL="$MOCK_GH" GITHUB_TOKEN=ghp_ci_fallback \
+  "$CLOSE" > "$TMP/close_guard.out" 2>&1
+assert_grep "close：GITHUB_TOKEN 兜底为 GH_TOKEN" "GH_TOKEN=ghp_ci_fallback" "$TMP/mock_guard_close.log"
 
 echo "== check-pr-gate.sh (mock gh)=="
 PRGATE="$ROOT/scripts/check-pr-gate.sh"
@@ -246,6 +266,16 @@ assert_eq "无 PR 不拦截" 0 "$(cat "$TMP/prgate4.out")"
 MOCK_LOG="$TMP/prgate5.log" MOCK_LIST_OUT='' GH="$MOCK_GH" \
   "$PRGATE" 0.2.0 > "$TMP/prgate5.out" 2>&1
 assert_eq "gh 查询失败（空输出）不拦截" 0 "$(cat "$TMP/prgate5.out")"
+
+# GitHub Actions 兜底：仅设 GITHUB_TOKEN 时应映射为 GH_TOKEN（回归：CI 步骤曾漏配 env 且脚本无兜底，
+# gh exit 4 被 2>/dev/null 吞掉 → PR 门闩静默恒不拦截）
+#
+# GitHub Actions fallback: GITHUB_TOKEN must be surfaced as GH_TOKEN (regression: the CI step
+# lacked env and the script had no fallback, so gh exit 4 was swallowed and the PR gate never blocked)
+GUARD_LOG="$TMP/mock_guard_prgate.log" MOCK_LOG="$TMP/mock_guard_prgate_gh.log" MOCK_LIST_OUT='[]' \
+  GH="$GH_TOKEN_GUARD" GH_REAL="$MOCK_GH" GITHUB_TOKEN=ghp_ci_fallback \
+  "$PRGATE" 0.2.0 > "$TMP/prgate_guard.out" 2>&1
+assert_grep "prgate：GITHUB_TOKEN 兜底为 GH_TOKEN" "GH_TOKEN=ghp_ci_fallback" "$TMP/mock_guard_prgate.log"
 
 echo "== push-upgrade-pr.sh upsert_pr (mock gh)=="
 # source 载入函数（脚本入口有 BASH_SOURCE 守卫，不执行 main）；
