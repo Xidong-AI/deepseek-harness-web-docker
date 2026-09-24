@@ -13,7 +13,7 @@ services:
     build:
       context: .
       args:
-        DSH_VERSION: ${DSH_VERSION:-0.1.5-rc.2}
+        DSH_VERSION: ${DSH_VERSION:-0.1.5-rc.3}
     container_name: dsh-web
     restart: unless-stopped
     ports:
