@@ -257,9 +257,62 @@ fi
 echo "==> trustedHosts 注入检查"
 # DSH_TRUSTED_HOSTS 在启动时注入 cordis.patch.yml（entrypoint 在 dsh 首启前预写，
 # dsh 的 initProfile 对已存在文件不覆盖）；此处验证注入结果
-docker exec "$CID" sh -c 'grep -q "smoke.example.com" /home/node/.dsh/profiles/web/cordis.patch.yml' \
-  || { echo "错误：trustedHosts 未注入 cordis.patch.yml" >&2; exit 1; }
-docker exec "$CID" sh -c 'yq ". | length" /home/node/.dsh/profiles/web/cordis.patch.yml | grep -q "^1$"' \
-  || { echo "错误：cordis.patch.yml 应为 1 个条目" >&2; exit 1; }
+#
+# 断言按语义（id=connection 的条目恰好 1 条、trustedHosts 恰为 smoke.example.com），
+# 不按「顶层条目总数 == 1」：dsh 可能在用户 patch 之外自行追加条目（插件启停记录等），
+# 总条目数断言会把这种正常追加误判成注入失败。此前 #19 只留下一句「应为 1 个条目」，
+# 日志里既没有实际条目数也没有文件内容，无从定位；本次同时补上失败现场 dump
+#
+# Assert on semantics (exactly one id=connection row whose trustedHosts is
+# smoke.example.com), not on the top-level row count: dsh may legitimately append
+# rows of its own (plugin enable/disable records), and a "total == 1" assert
+# misreads that as a failed injection. Issue #19 previously left only the message
+# "should be 1 entry" — no actual count, no file content; this also adds a
+# failure-scene dump.
+PATCH_PATH=/home/node/.dsh/profiles/web/cordis.patch.yml
+dump_patch() {
+  {
+    echo "--- 诊断：$PATCH_PATH ---"
+    docker exec "$CID" sh -c 'ls -la /home/node/.dsh/profiles/web' || true
+    echo "--- 文件内容（cat -n）---"
+    docker exec "$CID" sh -c "cat -n '$PATCH_PATH'" || true
+    echo "--- yq / jq 版本与条目数 ---"
+    docker exec "$CID" sh -c "command -v yq; yq --version; jq --version; yq '. | length' '$PATCH_PATH'" || true
+    echo "--- 容器日志（末 30 行）---"
+    docker logs "$CID" 2>&1 | tail -30 || true
+  } >&2
+}
+
+if ! docker exec "$CID" sh -c "grep -q 'smoke.example.com' '$PATCH_PATH'"; then
+  echo "错误：trustedHosts 未注入 $PATCH_PATH" >&2
+  dump_patch
+  exit 1
+fi
+
+# id=connection 条目必须恰好 1 条（entrypoint 只写一条；重复=注入逻辑回归）
+#
+# Exactly one id=connection row (the entrypoint writes a single one; a duplicate means the injection regressed)
+CONN_ROWS="$(docker exec "$CID" sh -c "yq '[.[] | select(.id == \"connection\")] | length' '$PATCH_PATH'" 2>/dev/null || true)"
+if [ "$CONN_ROWS" != "1" ]; then
+  echo "错误：$PATCH_PATH 中 id=connection 的条目应为 1 条，实际 [${CONN_ROWS:-查询失败}]" >&2
+  dump_patch
+  exit 1
+fi
+
+# connection.trustedHosts 必须恰为 smoke.example.com（注入值被 Caddy/其他层覆盖也算回归）
+#
+# connection.trustedHosts must be exactly smoke.example.com (an overwrite by Caddy or another layer is a regression too)
+CONN_HOSTS="$(docker exec "$CID" sh -c "yq -r '.[] | select(.id == \"connection\") | .config.trustedHosts // [] | join(\",\")' '$PATCH_PATH'" 2>/dev/null || true)"
+if [ "$CONN_HOSTS" != "smoke.example.com" ]; then
+  echo "错误：connection.trustedHosts 应为 smoke.example.com，实际 [${CONN_HOSTS:-空/查询失败}]" >&2
+  dump_patch
+  exit 1
+fi
+# 始终打印「实际条目数 + 注入值」：条目数不是断言条件，但它是判断 dsh 是否追加过条目的关键证据
+#
+# Always print the real row count and injected value: the count is not an assert condition,
+# but it is the key evidence for whether a dsh version appended rows of its own
+PATCH_LEN="$(docker exec "$CID" sh -c "yq '. | length' '$PATCH_PATH'" 2>/dev/null || echo '?')"
+echo "    条目数 $PATCH_LEN（connection 1 条，trustedHosts=[$CONN_HOSTS]）"
 
 echo "==> 冒烟测试全部通过 ✓"
