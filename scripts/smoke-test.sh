@@ -314,5 +314,11 @@ fi
 # but it is the key evidence for whether a dsh version appended rows of its own
 PATCH_LEN="$(docker exec "$CID" sh -c "yq '. | length' '$PATCH_PATH'" 2>/dev/null || echo '?')"
 echo "    条目数 $PATCH_LEN（connection 1 条，trustedHosts=[$CONN_HOSTS]）"
+# 连内容一起留证：条目数只说明「有没有多余条目」，内容才说明「多的是什么」
+# （dsh 追加的插件启停记录等）；1 行紧凑 JSON，不构成日志噪音
+#
+# Keep the content as evidence too: the count only says whether extra rows exist; the content
+# says which they are (plugin enable/disable records dsh appends). One compact JSON line.
+echo "    patch 全文：$(docker exec "$CID" sh -c "yq -c '.' '$PATCH_PATH'" 2>/dev/null || echo '?')"
 
 echo "==> 冒烟测试全部通过 ✓"
